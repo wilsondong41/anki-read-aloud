@@ -49,9 +49,9 @@ Paste everything between the two lines. (Images: https://imgur.com/a/0iGHrxq)
 
 Restart Anki after installing. A short guided window installs the natural voice in one click (free, under a minute) and shows how to use it. It comes back at each start until the natural voice is on, unless you tick "Don't show this again" (then it's the Recommended box in Settings). Everything else is in **Tools → Read Aloud Settings…**.
 
-<img src="https://i.imgur.com/KRxEOdp.png" width="540" alt="The setup window">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-read-aloud/main/listing/v17-preview/1-walkthrough-start.png" width="540" alt="The first-run window: Install Natural Voice in one click">
 
-<img src="https://i.imgur.com/76nm9P2.png" width="560" alt="Read Aloud settings: voice, key and speed">
+<img src="https://raw.githubusercontent.com/wilsondong41/anki-read-aloud/main/listing/v17-preview/3-settings-recommended.png" width="560" alt="Read Aloud settings: voice, key and speed">
 
 ## Privacy
 
