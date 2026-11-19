@@ -1,0 +1,14 @@
+{
+    "engine": "system",
+    "voice": "auto",
+    "windows_voice": "auto",
+    "edge_voice": "en-US-AvaNeural",
+    "edge_prefetch": false,
+    "shortcut": "v",
+    "speed": 1.0,
+    "slow_speed": 0.65,
+    "rate": 0,
+    "cleanup": true,
+    "deck_voices": {},
+    "pronunciations": {}
+}

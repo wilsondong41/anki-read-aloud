@@ -1,0 +1,11 @@
+backups/
+dist/
+user_files/
+read_aloud/user_files/
+.claude/
+AGENTS.md
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+meta.json
