@@ -14,7 +14,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(ROOT, "read_aloud")
 DIST = os.path.join(ROOT, "dist")
 FILES = ["__init__.py", "config.py", "text.py", "voices.py", "speech.py", "setup_window.py",
-         "settings_window.py", "win_tts.ps1", "config.json", "config.md", "manifest.json"]
+         "welcome_window.py", "settings_window.py", "win_tts.ps1", "config.json", "config.md", "manifest.json"]
 
 
 def package(out: str, skip: set) -> None:

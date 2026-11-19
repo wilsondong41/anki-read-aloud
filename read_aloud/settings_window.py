@@ -11,6 +11,7 @@ from aqt.qt import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -28,7 +29,7 @@ from aqt.qt import (
 from aqt.utils import openFolder, tooltip
 
 from . import config as cfg
-from . import setup_window, speech, voices
+from . import setup_window, speech, voices, welcome_window
 from .config import COMPUTER, IS_MAC, IS_WIN
 
 SAMPLE_TEXT = "Pseudomonas aeruginosa makes β-lactamase"
@@ -110,7 +111,8 @@ def _play_button(parent, on_click):
 
 
 class SettingsDialog(QDialog):
-    """Voice, key and speed. Everything else is in the setup window, the
+    """Voice, key and speed. Everything else is in the setup window (Voice
+    Downloads…), the natural voice walkthrough, the
     deck voices window or the pronunciations window."""
 
     def __init__(self, parent=None):
@@ -140,9 +142,27 @@ class SettingsDialog(QDialog):
         decks.setToolTip("A different voice for some decks, e.g. a Spanish voice for your Spanish deck")
         decks.clicked.connect(lambda: DeckVoicesDialog(self).exec())
 
+        # Hard to miss: the natural voice isn't on yet, and one button fixes it.
+        self.recommend = QFrame()
+        self.recommend.setObjectName("raRecommend")
+        self.recommend.setStyleSheet(
+            "#raRecommend { border: 1px solid rgba(214, 160, 0, 0.85); border-radius: 6px;"
+            " background: rgba(255, 196, 0, 0.14); }")
+        rec_text = QLabel("⭐ <b>Recommended: the natural voice.</b> It sounds far better than "
+                          "the system voice, especially for drug names, bacteria and Latin terms.")
+        rec_text.setWordWrap(True)
+        self.recommend_btn = QPushButton()
+        self.recommend_btn.setDefault(False)
+        self.recommend_btn.setAutoDefault(False)
+        self.recommend_btn.clicked.connect(self._recommend_clicked)
+        rl = QHBoxLayout(self.recommend)
+        rl.addWidget(rec_text, 1)
+        rl.addWidget(self.recommend_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         voice_box = QGroupBox("Voice")
         vl = QVBoxLayout(voice_box)
         if voices.NEURAL_OK:
+            vl.addWidget(self.recommend)
             vl.addWidget(self.edge_radio)
             vl.addLayout(self._indented(self.edge_combo,
                                         _play_button(self, lambda: self._preview(False, "edge"))))
@@ -157,6 +177,11 @@ class SettingsDialog(QDialog):
         decks_row.addWidget(decks)
         vl.addLayout(decks_row)
         self.edge_radio.toggled.connect(self._update_enabled)
+        # Only a voice the person picked here is saved: the walkthrough can
+        # turn the natural voice on in the background while this is open.
+        self._voice_picked = False
+        for radio in (self.edge_radio, self.system_radio):
+            radio.clicked.connect(self._picked_voice)
 
         # Key and speed
         self.key_combo = QComboBox()
@@ -183,8 +208,8 @@ class SettingsDialog(QDialog):
         pron.setToolTip("Words you've taught it to say differently (right-click a word on a card "
                         "→ Fix Pronunciation… to add one)")
         pron.clicked.connect(lambda: PronunciationListDialog(self).exec())
-        setup = QPushButton(f"Set Up This {COMPUTER}…")
-        setup.setToolTip("Install or update the neural voice, and get a high-quality offline voice")
+        setup = QPushButton("Voice Downloads…")
+        setup.setToolTip("Update the natural voice, or add offline voices and languages")
         setup.clicked.connect(self._run_setup)
         log = QPushButton("Open Log")
         log.setToolTip("Details of anything that went wrong")
@@ -218,7 +243,26 @@ class SettingsDialog(QDialog):
     def _update_edge_status(self):
         self.edge_status.setText(
             "If you're offline, the voice below reads instead." if voices.edge_command() else
-            f"⚠ Not set up on this {COMPUTER} yet. Click Set Up This {COMPUTER}… below.")
+            f"Not installed on this {COMPUTER} yet: click Install Natural Voice above.")
+
+    def _update_recommend(self):
+        installed = voices.edge_command() is not None
+        on = installed and self.edge_radio.isChecked()
+        self.recommend.setVisible(voices.NEURAL_OK and not on)
+        self.recommend_btn.setText("Turn On Natural Voice" if installed else "Install Natural Voice")
+
+    def _picked_voice(self):
+        self._voice_picked = True
+
+    def _recommend_clicked(self):
+        if voices.edge_command():
+            # Already downloaded: choose it here (saved with Save) and let them hear it.
+            self.edge_radio.setChecked(True)
+            self._voice_picked = True
+            self._preview(False, "edge")
+            return
+        welcome_window.open_welcome(self)
+        self._after_setup()
 
     def _update_key_labels(self):
         key = (self.key_combo.currentData() or "v").upper()
@@ -228,7 +272,15 @@ class SettingsDialog(QDialog):
 
     def _run_setup(self):
         setup_window.open_setup(self)
+        self._after_setup()
+
+    def _after_setup(self):
+        # Setup may have turned the natural voice on: show that here, so
+        # Save doesn't switch it back.
+        if setup_window._edge_in_use() and voices.edge_command():
+            self.edge_radio.setChecked(True)
         self._update_edge_status()
+        self._update_recommend()
         self._mac_voices = list(voices.mac_voice_list())
         self._fill_voice_lists()
         self._load_voice_lists()
@@ -296,6 +348,7 @@ class SettingsDialog(QDialog):
     def _update_enabled(self):
         edge = self.edge_radio.isChecked() and voices.NEURAL_OK
         self.edge_combo.setEnabled(edge)
+        self._update_recommend()
         self.system_label.setText(
             "Backup voice, for when the neural voice can't be reached:" if edge else "Voice:")
 
@@ -338,7 +391,10 @@ class SettingsDialog(QDialog):
     def _save(self):
         speech.stop()
         config = cfg.get()
-        config.update(self._values())
+        values = self._values()
+        if not self._voice_picked:
+            values.pop("engine")  # keep what's saved (setup may have changed it)
+        config.update(values)
         cfg.save(config)
         tooltip("Read Aloud settings saved")
         self.accept()

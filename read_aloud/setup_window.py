@@ -1,8 +1,9 @@
 """Setting up a computer: a new one has neither edge-tts nor (on a Mac) a
-Premium voice, so everything sounds robotic. The setup window installs what
-can be installed automatically and points to the rest; it opens by itself
-once per computer (for each thing missing, and to choose the natural voice
-when it's there but not in use), and from the settings window."""
+Premium voice, so everything sounds robotic. The natural voice has its own
+guided walkthrough (welcome_window), which opens at every start until it's
+on. This window (Settings → Voice Downloads…) updates it and points to the
+offline voices; it opens by itself once per computer when only those are
+missing."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import time
+import traceback
 
 from aqt import mw
 from aqt.qt import QCheckBox, QDialog, QEvent, QHBoxLayout, QLabel, QMenu, QPushButton, Qt, QVBoxLayout
@@ -56,7 +58,9 @@ def reasons(found: dict) -> set:
     new computer, whichever voice is chosen, so new users hear of it), or,
     when it's installed but the robotic voice still reads, the choice of it;
     and on a Mac a high-quality offline voice."""
-    if not found["edge"]:
+    if not voices.NEURAL_OK:
+        missing = set()  # no way to play it here (Linux without mpv)
+    elif not found["edge"]:
         missing = {"edge"}
     elif voices.NEURAL_OK and not _edge_in_use():
         missing = {"choose"}
@@ -449,13 +453,27 @@ def startup_check():
         except Exception:
             pass
 
+    def welcome(future):
+        try:
+            from . import welcome_window  # here: welcome_window imports this module
+            welcome_window.show_at_startup(future.result())
+        except Exception:
+            cfg.log("walkthrough failed to open:\n" + traceback.format_exc())
+
     def done(future):
         try:
             missing = reasons(future.result())
         except Exception:
+            cfg.log("start-up check failed:\n" + traceback.format_exc())
             return
-        # Offer each kind of setup once per computer; after that it's in
-        # Settings (and a notice explains a robotic voice when it happens).
+        # The natural voice: the walkthrough at every start until it's on
+        # (or "Don't show this again" sets skip_setup_check).
+        if missing & {"edge", "choose"}:
+            cfg.log(f"walkthrough offered: {sorted(missing)}")
+            mw.taskman.run_in_background(status, welcome)
+            return
+        # Optional extras (a Mac offline voice): once per computer; after
+        # that it's in Settings → Voice Downloads….
         shown = set(cfg.local_state().get("setup_shown", []))
         if missing - shown:
             cfg.set_local_state(setup_shown=sorted(shown | missing))

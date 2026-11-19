@@ -407,7 +407,7 @@ def notice(kind: str, lang: str | None = None) -> None:
     _notices_shown.add(kind)
     if kind == "missing":
         text = (f"Read Aloud: the neural voice isn't set up on this {COMPUTER} yet, "
-                "so the system voice read it.<br><b>Click here to set it up.</b>")
+                "so the robotic system voice read it.<br><b>Click here to install it (one click).</b>")
     else:
         text = ("Read Aloud: the neural voice couldn't be reached, so the offline voice read it "
                 "(it tries again in a few minutes).")
@@ -418,20 +418,23 @@ def notice(kind: str, lang: str | None = None) -> None:
             text += "<br>If you're online and this keeps happening, <b>click here to update it.</b>"
     cfg.log(f"notice: {kind}")
     tooltip(text, period=12000)
-    _open_setup_on_click()
+    _open_setup_on_click(walkthrough=kind == "missing")
 
 
-def _open_setup_on_click() -> None:
-    """Clicking the notice opens the setup window, instead of a trip
-    through the menus."""
+def _open_setup_on_click(walkthrough: bool = False) -> None:
+    """Clicking the notice opens the natural voice walkthrough (not set up
+    yet) or the setup window, instead of a trip through the menus."""
     try:
         from aqt import utils
-        from . import setup_window  # here: setup_window imports this module
+        from . import setup_window, welcome_window  # here: they import this module
         label = utils._tooltipLabel
 
         def clicked(event, label=label):
             label.hide()
-            setup_window.open_setup()
+            if walkthrough:
+                welcome_window.open_welcome()
+            else:
+                setup_window.open_setup()
 
         label.mousePressEvent = clicked
     except Exception:

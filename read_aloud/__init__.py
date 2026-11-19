@@ -1,5 +1,5 @@
 """
-Read Aloud — Anki Add-on (v16)
+Read Aloud — Anki Add-on (v17)
 
 Highlight text on a card and press V to hear it:
 
@@ -14,11 +14,13 @@ Tools → Read Aloud Settings… (or the add-on's Config button) → voice, key,
 
 Optional neural voice: Microsoft's online Edge read-aloud service through
 edge-tts (not an official API), so the text being read is sent to
-Microsoft. A setup window offers to install it on each computer.
+Microsoft. A guided walkthrough installs it in one click; it opens at every
+start until the natural voice is on, unless "Don't show this again" is ticked.
 
 Files: config (settings, state, log), text (clean-up of card text), voices
 (finding voices and programs), speech (making and playing audio),
-setup_window and settings_window (the windows).
+welcome_window (the natural voice walkthrough), setup_window and
+settings_window (the other windows).
 
 Anki's own V (replay own voice) and Shift+V (record own voice) shortcuts are
 turned off in the reviewer while V is the key; both stay in the reviewer's
@@ -341,8 +343,12 @@ def _setup():
     gui_hooks.webview_will_show_context_menu.append(_on_context_menu)
 
     # A new computer is missing the natural voices: offer to set them up,
-    # once a profile is open (not over the profile chooser).
+    # once a profile is open (not over the profile chooser). On a Mac, Anki
+    # opens the profile before main_window_did_init, so the hook alone would
+    # miss it: check for an open profile here too.
     gui_hooks.profile_did_open.append(_on_profile_open)
+    if getattr(mw, "col", None) is not None:
+        _on_profile_open()
 
     # The add-on's Config button opens the settings window instead of raw JSON.
     mw.addonManager.setConfigAction(cfg.ADDON, open_settings)

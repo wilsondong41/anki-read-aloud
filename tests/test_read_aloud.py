@@ -24,7 +24,7 @@ _app = QApplication.instance() or QApplication([])
 
 import read_aloud  # noqa: E402
 from read_aloud import config as cfg  # noqa: E402
-from read_aloud import setup_window, speech, text, voices  # noqa: E402
+from read_aloud import setup_window, speech, text, voices, welcome_window  # noqa: E402
 from read_aloud import settings_window  # noqa: E402,F401  (loads the windows)
 
 
@@ -103,6 +103,9 @@ class Sandbox(unittest.TestCase):
             (speech, "mw"), (speech, "tooltip"), (speech, "CACHE_DIR"), (speech, "RENDER_DIR"),
             (voices, "edge_command"), (voices, "player"), (voices, "EDGE_VOICES_FILE"),
             (setup_window, "mw"), (setup_window, "status"), (setup_window, "SetupDialog"),
+            (setup_window, "install_edge_tts"), (welcome_window, "mw"),
+            (welcome_window, "show_at_startup"), (welcome_window, "tooltip"), (speech, "speak"),
+            (settings_window, "mw"), (settings_window, "tooltip"), (voices, "NEURAL_OK"),
         ]]
         fake_mw = types.SimpleNamespace(
             addonManager=types.SimpleNamespace(getConfig=lambda name: dict(self.config),
@@ -111,7 +114,7 @@ class Sandbox(unittest.TestCase):
                 run_on_main=lambda f: f(),
                 run_in_background=lambda fn, done=None: done(types.SimpleNamespace(result=fn))
                 if done else fn()))
-        cfg.mw = speech.mw = setup_window.mw = fake_mw
+        cfg.mw = speech.mw = setup_window.mw = welcome_window.mw = settings_window.mw = fake_mw
         cfg.LOCAL_DIR = self.tmp
         cfg.LOCAL_STATE = os.path.join(self.tmp, "state.json")
         cfg.LOG_PATH = os.path.join(self.tmp, "read_aloud.log")
@@ -168,34 +171,131 @@ class ConfigTest(Sandbox):
 
 
 class SetupPromptTest(Sandbox):
-    def test_offered_once_per_computer_and_reason(self) -> None:
+    def _watch(self, found):
+        """Start-up windows opened: ("walkthrough" | "setup", status)."""
         shown = []
-        found = {"edge": False, "mac_voice": True, "win_voices": 0}
         setup_window.status = lambda quick=False: found
-        setup_window.SetupDialog = lambda s: types.SimpleNamespace(show=lambda: shown.append(s))
-        self.config = {"engine": "system"}  # a new user: the natural voice is offered anyway
-        setup_window.startup_check()
-        setup_window.startup_check()  # next start: not again
-        self.assertEqual(len(shown), 1)
-        if cfg.IS_MAC:
-            found["mac_voice"] = False
-            setup_window.startup_check()  # something else missing: offered once more
+        welcome_window.show_at_startup = lambda s: shown.append(("walkthrough", s))
+        setup_window.SetupDialog = lambda s: types.SimpleNamespace(
+            show=lambda: shown.append(("setup", s)))
+        return shown
+
+    def test_walkthrough_every_start_until_natural_voice_installed(self) -> None:
+        shown = self._watch({"edge": False, "mac_voice": True, "win_voices": 0})
+        self.config = {"engine": "system"}  # a new user
+        for _ in range(3):
             setup_window.startup_check()
-            self.assertEqual(len(shown), 2)
+        self.assertEqual([kind for kind, _ in shown], ["walkthrough"] * 3)
+
+    def test_dont_show_again_stops_it(self) -> None:
+        shown = self._watch({"edge": False, "mac_voice": True, "win_voices": 0})
+        cfg.set_local_state(skip_setup_check=True)
+        setup_window.startup_check()
+        self.assertEqual(shown, [])
+
+    def test_installed_natural_voice_not_in_use_is_offered_every_start(self) -> None:
+        # e.g. a reinstall: edge-tts is still there, but the default is the system voice.
+        shown = self._watch({"edge": True, "mac_voice": True, "win_voices": 0})
+        self.config = {"engine": "system"}
+        setup_window.startup_check()
+        setup_window.startup_check()
+        self.assertEqual([kind for kind, _ in shown], ["walkthrough"] * 2)
+        self.config = {"engine": "edge"}  # turned on: no more
+        setup_window.startup_check()
+        self.assertEqual(len(shown), 2)
+
+    def test_offline_voice_alone_is_offered_once(self) -> None:
+        if not cfg.IS_MAC:
+            self.skipTest("Mac only")
+        shown = self._watch({"edge": True, "mac_voice": False, "win_voices": 0})
+        self.config = {"engine": "edge"}
+        setup_window.startup_check()
+        setup_window.startup_check()
+        self.assertEqual([kind for kind, _ in shown], ["setup"])
+
+    def test_no_walkthrough_where_the_natural_voice_cannot_play(self) -> None:
+        voices.NEURAL_OK = False  # e.g. Linux without mpv
+        self.config = {"engine": "system"}
+        self.assertNotIn("edge", setup_window.reasons({"edge": False, "mac_voice": True}))
 
     def test_nothing_offered_when_set_up(self) -> None:
         self.config = {"engine": "edge"}
         self.assertEqual(setup_window.reasons({"edge": True, "mac_voice": True, "win_voices": 0}), set())
 
-    def test_installed_natural_voice_not_in_use_is_offered_once(self) -> None:
-        # e.g. a reinstall: edge-tts is still there, but the default is the system voice.
-        shown = []
-        setup_window.status = lambda quick=False: {"edge": True, "mac_voice": True, "win_voices": 0}
-        setup_window.SetupDialog = lambda s: types.SimpleNamespace(show=lambda: shown.append(s))
+
+class WalkthroughTest(Sandbox):
+    def setUp(self) -> None:
+        super().setUp()
+        self.spoken = []
+        speech.speak = lambda text, **kw: self.spoken.append(text)
+        welcome_window.tooltip = lambda *a, **kw: None
         self.config = {"engine": "system"}
-        setup_window.startup_check()
-        setup_window.startup_check()
-        self.assertEqual(len(shown), 1)
+
+    def _dialog(self, edge=False, startup=True):
+        from aqt.qt import QWidget
+        self.host = QWidget()  # stands in for Anki's main window
+        d = welcome_window.WelcomeDialog({"edge": edge, "mac_voice": True, "win_voices": 0},
+                                         self.host, startup=startup)
+        d.show()
+        return d
+
+    def test_dont_show_again_is_saved_on_close(self) -> None:
+        d = self._dialog()
+        d.never.setChecked(True)
+        d.reject()  # Not Now, or the window's X
+        self.assertTrue(cfg.local_state().get("skip_setup_check"))
+
+    def test_not_now_without_the_box_asks_again(self) -> None:
+        self._dialog().reject()
+        self.assertFalse(cfg.local_state().get("skip_setup_check"))
+
+    def test_no_dont_show_again_when_opened_from_settings(self) -> None:
+        d = self._dialog(startup=False)
+        self.assertFalse(d.never.isVisible())
+
+    def test_install_turns_it_on_and_says_how_to_use_it(self) -> None:
+        setup_window.install_edge_tts = lambda: ""
+        d = self._dialog()
+        self.assertEqual(d.go_btn.text(), "Install Natural Voice")
+        d.go_btn.click()
+        self.assertEqual(d.pages.currentIndex(), d.DONE)
+        self.assertEqual(self.config.get("engine"), "edge")
+        self.assertEqual(self.spoken, [welcome_window.READY])
+        self.assertEqual(d.close_btn.text(), "Done")
+        d.never.setChecked(True)  # hidden by now; must not count
+        d.accept()
+        self.assertFalse(cfg.local_state().get("skip_setup_check"))
+
+    def test_failed_install_offers_try_again(self) -> None:
+        setup_window.install_edge_tts = lambda: "pip: network unreachable"
+        d = self._dialog()
+        d.go_btn.click()
+        self.assertEqual(d.pages.currentIndex(), d.INSTALLING)
+        self.assertTrue(d.error_row.isVisible())
+        self.assertFalse(d.details.isVisible())
+        self.assertIn("network unreachable", d.details.toPlainText())
+        self.assertEqual(self.config.get("engine"), "system")
+        setup_window.install_edge_tts = lambda: ""
+        d.retry_btn.click()
+        self.assertEqual(d.pages.currentIndex(), d.DONE)
+
+    def test_offline_voice_offered_on_last_page_not_again_at_start(self) -> None:
+        setup_window.install_edge_tts = lambda: ""
+        from aqt.qt import QWidget
+        self.host = QWidget()
+        d = welcome_window.WelcomeDialog({"edge": False, "mac_voice": False}, self.host)
+        d.show()
+        d.go_btn.click()
+        if cfg.IS_MAC:
+            self.assertIn("mac_voice", cfg.local_state().get("setup_shown", []))
+
+    def test_already_downloaded_is_one_click(self) -> None:
+        setup_window.install_edge_tts = lambda: self.fail("should not download")
+        d = self._dialog(edge=True)
+        self.assertEqual(d.go_btn.text(), "Turn On Natural Voice")
+        d.go_btn.click()
+        self.assertEqual(d.pages.currentIndex(), d.DONE)
+        self.assertEqual(self.config.get("engine"), "edge")
 
 
 class SpeechJobTest(Sandbox):
@@ -521,6 +621,29 @@ class PreviewerTest(Sandbox):
         read_aloud._on_context_menu(other_web, other_menu)
         self.assertEqual(other_menu.actions(), [])
 
+
+
+class SettingsSaveTest(Sandbox):
+    def _dialog(self):
+        from aqt.qt import QWidget
+        settings_window.tooltip = lambda *a, **kw: None
+        voices.edge_command = lambda: (["edge-tts"], {})
+        self.host = QWidget()
+        return settings_window.SettingsDialog(self.host)
+
+    def test_save_keeps_a_voice_turned_on_in_the_background(self) -> None:
+        self.config = {"engine": "system"}
+        d = self._dialog()
+        self.config["engine"] = "edge"  # the walkthrough finished installing meanwhile
+        d._save()
+        self.assertEqual(self.config["engine"], "edge")
+
+    def test_save_keeps_a_voice_the_person_picked(self) -> None:
+        self.config = {"engine": "edge"}
+        d = self._dialog()
+        d.system_radio.click()
+        d._save()
+        self.assertEqual(self.config["engine"], "system")
 
 if __name__ == "__main__":
     unittest.main()

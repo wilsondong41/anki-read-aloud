@@ -1,6 +1,6 @@
 ## Read Aloud Configuration
 
-Works on macOS and Windows (Linux: espeak, plus the neural voice if mpv is installed). Settings open in their own window: the add-on's **Config** button or **Tools → Read Aloud Settings…**. There you pick the voice, the key and the speed (▶ plays a sample), voices for particular decks, and your pronunciations. Chinese, Japanese, Korean, Russian, Arabic, Hebrew, Thai and Hindi text is read with a voice of that language on its own (unless your voice already speaks it). If the natural voice can't be reached, a computer voice reads instead; Set Up This Mac/PC… shows how to make it natural-sounding for the languages you read. Pressing the key stops the card's own audio (R replays it).
+Works on macOS and Windows (Linux: espeak, plus the neural voice if mpv is installed). Settings open in their own window: the add-on's **Config** button or **Tools → Read Aloud Settings…**. There you pick the voice, the key and the speed (▶ plays a sample), voices for particular decks, and your pronunciations. Chinese, Japanese, Korean, Russian, Arabic, Hebrew, Thai and Hindi text is read with a voice of that language on its own (unless your voice already speaks it). The first time, a short window installs the natural voice in one click (it comes back at each start until the natural voice is on, unless you tick "Don't show this again"). If the natural voice can't be reached, a computer voice reads instead; Settings → Voice Downloads… shows how to make it natural-sounding for the languages you read. Pressing the key stops the card's own audio (R replays it).
 
 **Keys (in the reviewer and browser Preview):** highlight text, then
 - **V** — read it. Press **V** again to replay; pressing V while it's still talking stops it.
@@ -25,7 +25,7 @@ run `uv tool uninstall edge-tts`, and delete the "Read Aloud for Anki" folder
 - **windows_voice**: e.g. `"onecore:Microsoft Libby"` or `"sapi:Microsoft Zira Desktop"`, or `"auto"`. Separate from `voice` because the config is shared between computers.
 - **shortcut**: the key that reads (`"v"`); Shift+key reads slowly.
 - **speed**: normal speed (`1.0` = 100%, up to `2.0`). **slow_speed**: Shift+key speed (`0.3`–`1.0`).
-- **edge_prefetch**: fetch neural audio as soon as you highlight (sends the text to Microsoft). Asked in the setup window.
+- **edge_prefetch**: fetch neural audio as soon as you highlight (sends the text to Microsoft). In Settings → Voice Downloads….
 - **cleanup**: read medical and science shorthand as words (K+ → potassium, ↑ → increased). Off automatically for decks with a non-English voice.
 - **deck_voices**: `{"Deck name": {"edge_voice": …, "voice": …, "windows_voice": …, "cleanup": false}}`, edited in Settings → Voices for Specific Decks….
 - **rate**: Mac system voice words per minute, `0` = normal (premium voices mostly ignore it).

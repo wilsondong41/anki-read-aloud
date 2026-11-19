@@ -1,4 +1,4 @@
-# AnkiWeb listing for Read Aloud v16
+# AnkiWeb listing for Read Aloud v17
 
 Upload: dist/read_aloud-ankiweb.ankiaddon (not read_aloud.ankiaddon)
 
@@ -47,7 +47,7 @@ Paste everything between the two lines. (Images: https://imgur.com/a/0iGHrxq)
 
 ## Setting up
 
-Restart Anki after installing. A short setup window offers the natural voice (one click, free) and, on a Mac, shows where to download a high-quality offline voice. Everything else is in **Tools → Read Aloud Settings…**.
+Restart Anki after installing. A short guided window installs the natural voice in one click (free, under a minute) and shows how to use it. It comes back at each start until the natural voice is on, unless you tick "Don't show this again" (then it's the Recommended box in Settings). Everything else is in **Tools → Read Aloud Settings…**.
 
 <img src="https://i.imgur.com/KRxEOdp.png" width="540" alt="The setup window">
 
@@ -60,7 +60,7 @@ The natural voice is Microsoft's online Edge read-aloud service, used through th
 ## Good to know
 
 - Works on Mac and Windows. On Linux it uses espeak (and the natural voice if mpv is installed).
-- Microsoft changes its service now and then. If the natural voice stops working while you're online: Tools → Read Aloud Settings… → Set Up This Mac (or PC)… → Update.
+- Microsoft changes its service now and then. If the natural voice stops working while you're online: Tools → Read Aloud Settings… → Voice Downloads… → Update.
 - Pressing V stops the card's own audio so the two don't overlap; R replays it.
 - In the reviewer, V and Shift+V normally record and replay your own voice. Those stay in the reviewer's More menu, or pick another key in Settings.
 - The setup installs edge-tts outside Anki. To remove it after uninstalling: run `uv tool uninstall edge-tts` and delete the "Read Aloud for Anki" folder (Mac: ~/Library/Application Support; Windows: %LOCALAPPDATA%).
