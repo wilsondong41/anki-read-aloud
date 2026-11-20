@@ -100,6 +100,29 @@ def plain(field_html: str) -> str:
     return _sentences(line for line in lines if line)
 
 
+# A cloze hint, as Anki shows it in place of the hidden part: "[general/specific]".
+_HINT_RE = re.compile(r"\[([^\[\]\n]{1,100})\]")
+# Blanks that are the whole answer to a question ("Does hepatitis E have an
+# envelope? blank"): nothing more is said.
+_ANSWER_BLANKS_RE = re.compile(r"([?:])\s*blank(?:(?:\s*(?:,|and|or))*\s*blank)*\s*[.!]?\s*$",
+                               re.IGNORECASE)
+
+
+def tidy_spoken(text: str) -> str:
+    """How hidden parts are said: a hint is read as words ("[general/specific]"
+    → "general or specific"); a blank that is the whole answer after a
+    question is left out; any other is said as "blank"."""
+    def hint(m):
+        inside = m.group(1).strip()
+        if inside in ("...", "…"):
+            return " blank "
+        return " " + re.sub(r"\s*/\s*", " or ", inside) + " "
+    text = _HINT_RE.sub(hint, text or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+([?.!,:;])", r"\1", text)
+    return _ANSWER_BLANKS_RE.sub(r"\1", text).strip()
+
+
 def _sentences(parts) -> str:
     out = []
     for part in parts:
@@ -118,10 +141,15 @@ def _sentences(parts) -> str:
 
 def _fill_clozes(text: str, ordinal: int, hide: bool) -> str:
     """Inner clozes first (Anki allows nesting). The card's own cloze is
-    "blank" when hide, else its words; the others show their words."""
+    hidden as Anki shows it ("[hint]" or "blank") when hide, else its words;
+    the others show their words."""
+    def fill(m):
+        if hide and int(m.group(1)) == ordinal:
+            return f" [{m.group(3)}] " if m.group(3) else " blank "
+        return m.group(2)
+
     while True:
-        new = _CLOZE_RE.sub(
-            lambda m: " blank " if hide and int(m.group(1)) == ordinal else m.group(2), text)
+        new = _CLOZE_RE.sub(fill, text)
         if new == text:
             return text
         text = new
@@ -176,7 +204,7 @@ def question_text(card) -> str:
         values = [note[f] for f in _cloze_fields(template, names)]
         if any(_image_occlusion(v) for v in values):
             return ""
-        return _sentences(plain(_fill_clozes(v, ordinal, hide=True)) for v in values)
+        return tidy_spoken(_sentences(plain(_fill_clozes(v, ordinal, hide=True)) for v in values))
     fields = _plain_refs(template.get("qfmt", ""), names)
     return _sentences(plain(note[f]) for f in fields)
 

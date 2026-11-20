@@ -45,8 +45,9 @@ POLL_MS = 100
 
 def line_text(tag) -> str:
     """The line's words. Anki leaves a field's sound files in them
-    ("… [sound:x.mp3]"): those aren't read."""
-    return re.sub(r"\s+", " ", card_text.SOUND_RE.sub(" ", tag.field_text or "")).strip()
+    ("… [sound:x.mp3]"): those aren't read. Hidden parts are said like the
+    add-on's own reading (card_text.tidy_spoken)."""
+    return card_text.tidy_spoken(card_text.SOUND_RE.sub(" ", tag.field_text or ""))
 
 
 class ReadAloudVoice(Player):

@@ -147,6 +147,30 @@ _JS_INJECT = """
             }
         }
     }, true);
+
+    // AnKing's one-by-one clozes (N, "," or a click uncovers them): read
+    // each one as it is uncovered, when this card is being read aloud.
+    var uncovered = [], uncoverTimer = null;
+    new MutationObserver(function(changes) {
+        if (!window.__readAloudReveal) return;
+        changes.forEach(function(c) {
+            var box = c.target;
+            if (!box.classList || !box.classList.contains('cloze')) return;
+            for (var i = 0; i < c.removedNodes.length; i++) {
+                var n = c.removedNodes[i];
+                if (n.nodeType === 1 && n.classList.contains('cloze-hidden') &&
+                    uncovered.indexOf(box) < 0) uncovered.push(box);
+            }
+        });
+        if (!uncovered.length) return;
+        clearTimeout(uncoverTimer);
+        uncoverTimer = setTimeout(function() {
+            var words = uncovered.map(function(b) { return (b.innerText || '').trim(); })
+                                 .filter(function(t) { return t; });
+            uncovered = [];
+            if (words.length) pycmd('readAloudReveal:' + words.join(', '));
+        }, 60);
+    }).observe(document.body, {childList: true, subtree: true});
 })();
 """
 
@@ -167,16 +191,18 @@ def _reviewer_web():
     return None
 
 
-def _inject_into(web, new_card: bool = False) -> None:
+def _inject_into(web, new_card: bool = False, reveal: bool = False) -> None:
     # web.eval waits until the page has loaded; entering review (Study Now)
     # and opening the previewer reload the page, so running at once would miss it.
+    # reveal: read one-by-one clozes as they are uncovered (answer side).
     if web:
-        script = f"window.__readAloudKey = {json.dumps(cfg.shortcut())};" + _JS_INJECT
+        script = (f"window.__readAloudKey = {json.dumps(cfg.shortcut())};"
+                  f"window.__readAloudReveal = {json.dumps(bool(reveal))};" + _JS_INJECT)
         web.eval(script + (_JS_NEW_CARD if new_card else ""))
 
 
-def _inject(new_card: bool = False) -> None:
-    _inject_into(_reviewer_web(), new_card=new_card)
+def _inject(new_card: bool = False, reveal: bool = False) -> None:
+    _inject_into(_reviewer_web(), new_card=new_card, reveal=reveal)
 
 
 def _on_show_question(card=None):
@@ -191,8 +217,21 @@ def _on_show_question(card=None):
 
 
 def _on_show_answer(card=None):
-    _inject()
+    _inject(reveal=_reads_aloud(card or _card_from()))
     _auto_read(card, answer=True)
+
+
+def _reads_aloud(card) -> bool:
+    """Is this card being read aloud (its own Read_Aloud line, or "Read
+    cards aloud automatically"), with its deck playing sounds?"""
+    if card is None or not _plays_automatically(card):
+        return False
+    if cfg.auto_read():
+        return True
+    try:
+        return any(tts_voice.player.rank_for_tag(t) is not None for t in card.question_av_tags())
+    except Exception:
+        return False
 
 
 def _has_own_sound(card, answer: bool) -> bool:
@@ -330,7 +369,8 @@ def _on_card_will_show(text: str, card, kind: str) -> str:
                 entry[1] = card.id
                 if _PLAY_HOOK is None:  # (else stopped in _on_will_play_tags)
                     speech.stop()
-            _inject_into(web, new_card=new_card)
+            _inject_into(web, new_card=new_card,
+                         reveal=kind == "previewAnswer" and _reads_aloud(card))
     return text
 
 
@@ -394,6 +434,9 @@ def _on_pycmd(handled, message, context):
         return (True, None)
     if message.startswith("readAloudPrefetch:"):
         _safely(speech.prefetch, message[len("readAloudPrefetch:"):], **_where(context))
+        return (True, None)
+    if message.startswith("readAloudReveal:"):
+        _safely(speech.speak, message[len("readAloudReveal:"):], **_where(context))
         return (True, None)
     if message == "readAloudNone":
         if speech.is_speaking():

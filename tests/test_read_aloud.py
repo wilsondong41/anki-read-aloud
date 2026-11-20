@@ -18,9 +18,11 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from aqt.qt import QApplication  # noqa: E402
+from aqt.qt import QApplication, QCoreApplication, Qt  # noqa: E402
+from aqt.qt import QWebEngineView  # noqa: E402,F401  (must load before the app starts)
 
-_app = QApplication.instance() or QApplication([])
+QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+_app = QApplication.instance() or QApplication(["read-aloud-tests"])
 
 import read_aloud  # noqa: E402
 from read_aloud import config as cfg  # noqa: E402
@@ -734,8 +736,31 @@ class CardTextTest(unittest.TestCase):
         self.assertEqual(card_text.plain("a&nbsp;b<div>c</div><script>x()</script>d"), "a b. c. d")
         card = fake_card({"Text": "{{c1::Na+::ion}} and {{c2::K+ via {{c1::ATPase}}}}"},
                          "{{cloze:Text}}", "{{cloze:Text}}", cloze=True)
-        self.assertEqual(card_text.question_text(card), "blank and K+ via blank")
+        self.assertEqual(card_text.question_text(card), "ion and K+ via blank")
         self.assertEqual(card_text.answer_text(card, card_text.WORDS), "Na+, ATPase")
+
+    def test_how_hidden_parts_are_said(self) -> None:
+        cases = [
+            ("Does hepatitis E have an envelope? blank", "Does hepatitis E have an envelope?"),
+            ("What are the 3 Ps? blank, blank, and blank", "What are the 3 Ps?"),
+            ("Drug of choice for MRSA: blank", "Drug of choice for MRSA:"),
+            ("Promoters bind [general/specific] transcription factors",
+             "Promoters bind general or specific transcription factors"),
+            ("Promoters bind blank transcription factors", "Promoters bind blank transcription factors"),
+            ("blank is first-line for MRSA", "blank is first-line for MRSA"),
+            ("Is it [yes / no]?", "Is it yes or no?"),
+        ]
+        for raw, said in cases:
+            self.assertEqual(card_text.tidy_spoken(raw), said, raw)
+
+    def test_question_with_the_answer_on_its_own_line(self) -> None:
+        card = fake_card({"Text": "Does hepatitis E have an envelope?<br><br>{{c1::No}}"},
+                         "{{cloze:Text}}", "{{cloze:Text}}", cloze=True)
+        self.assertEqual(card_text.question_text(card), "Does hepatitis E have an envelope?")
+        self.assertEqual(card_text.answer_text(card), "Does hepatitis E have an envelope? No")
+        hinted = fake_card({"Text": "Promoters bind {{c1::general::general/specific}} factors"},
+                           "{{cloze:Text}}", "{{cloze:Text}}", cloze=True)
+        self.assertEqual(card_text.question_text(hinted), "Promoters bind general or specific factors")
 
     def test_image_occlusion_is_not_read(self) -> None:
         card = fake_card({"Image Occlusion": "{{c1::image-occlusion:rect:left=.1}}"},
@@ -964,6 +989,13 @@ class ReadAloudVoiceTest(Sandbox):
         self.assertIs(self.player._timer, timer)
         self.assertTrue(timer.isActive())
 
+    def test_lines_say_hidden_parts_like_the_add_on(self) -> None:
+        # Anki's own text for these lines: "blank", or the hint in brackets.
+        self.player.play(tts("Does hepatitis E have an envelope? blank"), lambda: None)
+        self.player.play(tts("Promoters bind [general/specific] factors"), lambda: None)
+        self.assertEqual([t for t, _ in self.spoken],
+                         ["Does hepatitis E have an envelope?", "Promoters bind general or specific factors"])
+
     def test_sound_file_names_are_not_read(self) -> None:
         self.player.play(tts("converted via blank  [sound:y.mp3] and K+"), lambda: None)
         self.assertEqual(self.spoken[0][0], "converted via blank and K+")
@@ -1003,6 +1035,81 @@ class ReadAloudVoiceTest(Sandbox):
             self.assertEqual(len(self.stops), 1)
         finally:
             read_aloud.mw = saved_mw
+
+
+
+# AnKing's one-by-one clozes, read as they are uncovered
+##############################################################################
+
+
+class RevealTest(Sandbox):
+    def setUp(self) -> None:
+        super().setUp()
+        self.saved += [(read_aloud, "mw", read_aloud.mw)]
+        self.spoken: list = []
+        speech.speak = lambda text, **kw: self.spoken.append((text, kw))
+        read_aloud.mw = types.SimpleNamespace(
+            state="review", reviewer=types.SimpleNamespace(card=None, web=None),
+            col=types.SimpleNamespace(decks=types.SimpleNamespace(name=lambda did: "AnKing::Micro")))
+
+    def anking_line_card(self, autoplay=True):
+        card = anking_card(autoplay=autoplay)
+        card.question_av_tags = lambda: [tts()]
+        return card
+
+    def test_only_cards_being_read_aloud_read_their_reveals(self) -> None:
+        self.assertTrue(read_aloud._reads_aloud(self.anking_line_card()))
+        self.assertFalse(read_aloud._reads_aloud(self.anking_line_card(autoplay=False)))
+        self.assertFalse(read_aloud._reads_aloud(anking_card()))  # no line, auto-read off
+        self.config = {"auto_read": True}
+        self.assertTrue(read_aloud._reads_aloud(anking_card()))
+
+    def test_uncovered_cloze_is_read_with_the_decks_voice(self) -> None:
+        card = anking_card()
+        handled = read_aloud._on_pycmd((False, None), "readAloudReveal:11-deoxycortisol",
+                                       types.SimpleNamespace(card=card))
+        self.assertEqual(handled, (True, None))
+        self.assertEqual(self.spoken[0][0], "11-deoxycortisol")
+        self.assertEqual(self.spoken[0][1]["deck"], "AnKing::Micro")
+
+    def test_page_script_reports_each_uncovered_cloze(self) -> None:
+        # The injected script in a real browser page, with AnKing's markup
+        # for hidden one-by-one clozes, uncovered the way AnKing does it.
+        from aqt.qt import QWebEngineView
+        view = QWebEngineView()
+        page = ("<html><body><div id=qa>17-OHP to "
+                "<span class='cloze one-by-one' id=a><span class=cloze-replacer>👑</span>"
+                "<span class=cloze-hidden><b>11-deoxycortisol</b></span></span> via "
+                "<span class='cloze one-by-one' id=b><span class=cloze-replacer>👑</span>"
+                "<span class=cloze-hidden>21-hydroxylase</span></span></div></body></html>")
+        loaded = []
+        view.loadFinished.connect(lambda ok: loaded.append(ok))
+        view.setHtml(page)
+        self.assertTrue(pump(lambda: loaded, 15))
+        result: list = []
+
+        def js(code):
+            done = []
+            view.page().runJavaScript(code, lambda r: done.append(r))
+            pump(lambda: done, 5)
+            return done[0] if done else None
+
+        uncover = ("(function(id){var c=document.getElementById(id);"
+                   "c.removeChild(c.querySelector('.cloze-replacer'));"
+                   "var h=c.querySelector('.cloze-hidden');c.removeChild(h);"
+                   "while(h.childNodes.length)c.appendChild(h.childNodes[0]);})")
+        js("window.sent=[];window.pycmd=function(m){window.sent.push(m)};"
+           "window.__readAloudKey='v';window.__readAloudReveal=false;" + read_aloud._JS_INJECT)
+        js(uncover + "('a')")
+        pump(lambda: False, 0.3)
+        self.assertEqual(js("window.sent"), [])  # not being read aloud: quiet
+        js("window.__readAloudReveal=true;" + uncover + "('b')")
+        self.assertTrue(pump(lambda: js("window.sent.length") == 1, 3))
+        self.assertEqual(js("window.sent"), ["readAloudReveal:21-hydroxylase"])
+        from PyQt6 import sip
+        sip.delete(view.page())
+        sip.delete(view)
+        pump(lambda: False, 0.2)
 
 
 if __name__ == "__main__":
