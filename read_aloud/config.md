@@ -9,6 +9,8 @@ Works on macOS and Windows (Linux: espeak, plus the neural voice if mpv is insta
 
 V can be changed to another letter in the settings.
 
+**Reading cards aloud automatically** (off unless you turn it on in the settings): the question is read when it shows (a cloze's hidden part is read as "blank"), and the answer when you flip the card: the whole sentence with the answer filled in, or just the answer words. Only the card's main text is read, never Extra or other side fields. Cards with their own sound are left alone. Press V to stop it. Desktop only.
+
 **Privacy:** the neural voice uses Microsoft's online Edge read-aloud service
 through the free edge-tts tool (not an official Microsoft API), so the text you
 have read aloud is sent to Microsoft. With prefetch on, that happens as soon as
@@ -26,6 +28,8 @@ run `uv tool uninstall edge-tts`, and delete the "Read Aloud for Anki" folder
 - **shortcut**: the key that reads (`"v"`); Shift+key reads slowly.
 - **speed**: normal speed (`1.0` = 100%, up to `2.0`). **slow_speed**: Shift+key speed (`0.3`–`1.0`).
 - **edge_prefetch**: fetch neural audio as soon as you highlight (sends the text to Microsoft). In Settings → Voice Downloads….
+- **auto_read**: `true` reads each card's question and answer when they show (default `false`).
+- **auto_read_answer**: on the answer side, `"whole"` (the sentence with the answer filled in, default) or `"words"` (just the answer).
 - **cleanup**: read medical and science shorthand as words (K+ → potassium, ↑ → increased). Off automatically for decks with a non-English voice.
 - **deck_voices**: `{"Deck name": {"edge_voice": …, "voice": …, "windows_voice": …, "cleanup": false}}`, edited in Settings → Voices for Specific Decks….
 - **rate**: Mac system voice words per minute, `0` = normal (premium voices mostly ignore it).

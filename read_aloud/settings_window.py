@@ -7,6 +7,7 @@ from aqt import mw
 from aqt.qt import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -203,6 +204,28 @@ class SettingsDialog(QDialog):
         sf.addRow(self.speed_label, speed_row)
         sf.addRow(self.slow_label, slow_row)
 
+        # Reading cards aloud automatically
+        self.auto_check = QCheckBox("Read cards aloud automatically")
+        self.auto_check.setToolTip("The question when it shows, then the answer when you flip it. "
+                                   "Press the key to stop it.")
+        self.answer_combo = QComboBox()
+        self.answer_combo.addItem("the whole sentence with the answer filled in", "whole")
+        self.answer_combo.addItem("just the answer words", "words")
+        self.auto_note = QLabel("Only the card's main text is read (never Extra or other side "
+                                "fields). Cards with their own sound are left alone.")
+        self.auto_note.setWordWrap(True)
+        self.auto_note.setStyleSheet("color: gray;")
+        answer_row = QHBoxLayout()
+        answer_row.addSpacing(24)
+        answer_row.addWidget(QLabel("On the answer side, read:"))
+        answer_row.addWidget(self.answer_combo, 1)
+        auto_box = QGroupBox("Reading cards")
+        al = QVBoxLayout(auto_box)
+        al.addWidget(self.auto_check)
+        al.addLayout(answer_row)
+        al.addLayout(self._indented(self.auto_note))
+        self.auto_check.toggled.connect(self._update_auto)
+
         # The rest, out of the way
         pron = QPushButton("Pronunciations…")
         pron.setToolTip("Words you've taught it to say differently (right-click a word on a card "
@@ -227,6 +250,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(voice_box)
         layout.addWidget(speed_box)
+        layout.addWidget(auto_box)
         layout.addLayout(bottom)
 
         self._load(config)
@@ -345,6 +369,9 @@ class SettingsDialog(QDialog):
             return self.system_combo.currentData()
         return self.system_combo.currentText().strip()
 
+    def _update_auto(self):
+        self.answer_combo.setEnabled(self.auto_check.isChecked())
+
     def _update_enabled(self):
         edge = self.edge_radio.isChecked() and voices.NEURAL_OK
         self.edge_combo.setEnabled(edge)
@@ -370,6 +397,10 @@ class SettingsDialog(QDialog):
         key = config.get("shortcut")
         _select_data(self.key_combo, key if key in cfg.SHORTCUT_KEYS else "v")
         self._update_key_labels()
+        self.auto_check.setChecked(config.get("auto_read") is True)
+        _select_data(self.answer_combo,
+                     "words" if config.get("auto_read_answer") == "words" else "whole")
+        self._update_auto()
 
     def _values(self) -> dict:
         return {
@@ -379,6 +410,8 @@ class SettingsDialog(QDialog):
             "speed": self.speed_slider.value() / 100,
             "slow_speed": self.slow_slider.value() / 100,
             "shortcut": self.key_combo.currentData() or "v",
+            "auto_read": self.auto_check.isChecked(),
+            "auto_read_answer": self.answer_combo.currentData() or "whole",
         }
 
     def _preview(self, slow, engine=None):

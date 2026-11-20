@@ -24,7 +24,7 @@ _app = QApplication.instance() or QApplication([])
 
 import read_aloud  # noqa: E402
 from read_aloud import config as cfg  # noqa: E402
-from read_aloud import setup_window, speech, text, voices, welcome_window  # noqa: E402
+from read_aloud import card_text, setup_window, speech, text, voices, welcome_window  # noqa: E402
 from read_aloud import settings_window  # noqa: E402,F401  (loads the windows)
 
 
@@ -644,6 +644,179 @@ class SettingsSaveTest(Sandbox):
         d.system_radio.click()
         d._save()
         self.assertEqual(self.config["engine"], "system")
+
+
+# Reading cards aloud automatically
+##############################################################################
+
+ANKING_FRONT = ('<div class="text">{{cloze:Text}}</div>{{One by one}}'
+                '{{#Tags}}<div>{{clickable::Tags}}</div>{{/Tags}}')
+ANKING_BACK = ('<div class="text">{{edit:cloze:Text}}</div>'
+               '{{#Extra}}<button>Extra</button><div>{{edit:Extra}}</div>{{/Extra}}'
+               '{{#Lecture Notes}}<div>{{edit:Lecture Notes}}</div>{{/Lecture Notes}}')
+BASIC_EXTRA_BACK = ('{{FrontSide}}<hr id=answer>{{Back}}'
+                    '{{#Extra}}<div>{{Extra}}</div>{{/Extra}}{{hint:Mnemonic}}')
+
+
+def fake_card(fields: dict, qfmt: str, afmt: str, cloze: bool, ord_: int = 0,
+              sounds: bool = False, did: int = 1):
+    class FakeNote:
+        def note_type(self):
+            return {"type": 1 if cloze else 0, "flds": [{"name": n} for n in fields]}
+
+        def joined_fields(self):
+            return "\x1f".join(fields.values())
+
+        def __getitem__(self, key):
+            return fields[key]
+
+    note = FakeNote()
+    return types.SimpleNamespace(
+        id=7, did=did, odid=0, ord=ord_, note=lambda: note,
+        template=lambda: {"qfmt": qfmt, "afmt": afmt},
+        question_av_tags=lambda: ["sound"] if sounds else [],
+        answer_av_tags=lambda: [],
+    )
+
+
+def anking_card(ord_: int = 0, **kw):
+    return fake_card({"Text": "{{c1::Vancomycin}} treats <b>{{c2::MRSA}}</b><br>"
+                              "<img src=\"x.png\">[sound:x.mp3]",
+                      "Extra": "Red man syndrome", "Lecture Notes": "slide 4",
+                      "One by one": ""},
+                     ANKING_FRONT, ANKING_BACK, cloze=True, ord_=ord_, **kw)
+
+
+def basic_card(**kw):
+    return fake_card({"Front": "First-line for MRSA?", "Back": "Vancomycin",
+                      "Extra": "Red man syndrome", "Mnemonic": "Vanco"},
+                     "{{Front}}", BASIC_EXTRA_BACK, cloze=False, **kw)
+
+
+class CardTextTest(unittest.TestCase):
+    def test_cloze_question_reads_the_hidden_part_as_blank(self) -> None:
+        self.assertEqual(card_text.question_text(anking_card(0)), "blank treats MRSA")
+        self.assertEqual(card_text.question_text(anking_card(1)), "Vancomycin treats blank")
+
+    def test_cloze_answer_whole_sentence_or_just_the_words(self) -> None:
+        card = anking_card(1)
+        self.assertEqual(card_text.answer_text(card), "Vancomycin treats MRSA")
+        self.assertEqual(card_text.answer_text(card, card_text.WORDS), "MRSA")
+
+    def test_extra_and_side_fields_never_read(self) -> None:
+        for card in (anking_card(0), basic_card()):
+            for said in (card_text.question_text(card), card_text.answer_text(card),
+                         card_text.answer_text(card, card_text.WORDS)):
+                self.assertNotIn("Red man", said)
+                self.assertNotIn("slide", said)
+                self.assertNotIn("Vanco ", said + " ")
+
+    def test_basic_card_reads_front_then_back_either_way(self) -> None:
+        card = basic_card()
+        self.assertEqual(card_text.question_text(card), "First-line for MRSA?")
+        self.assertEqual(card_text.answer_text(card), "Vancomycin")
+        self.assertEqual(card_text.answer_text(card, card_text.WORDS), "Vancomycin")
+
+    def test_reversed_card_back_reads_the_front_field(self) -> None:
+        card = fake_card({"Front": "dog", "Back": "perro"}, "{{Back}}",
+                         "{{FrontSide}}<hr id=answer>{{Front}}", cloze=False, ord_=1)
+        self.assertEqual(card_text.question_text(card), "perro")
+        self.assertEqual(card_text.answer_text(card), "dog")
+
+    def test_html_hints_and_nested_clozes(self) -> None:
+        self.assertEqual(card_text.plain("a&nbsp;b<div>c</div><script>x()</script>d"), "a b. c. d")
+        card = fake_card({"Text": "{{c1::Na+::ion}} and {{c2::K+ via {{c1::ATPase}}}}"},
+                         "{{cloze:Text}}", "{{cloze:Text}}", cloze=True)
+        self.assertEqual(card_text.question_text(card), "blank and K+ via blank")
+        self.assertEqual(card_text.answer_text(card, card_text.WORDS), "Na+, ATPase")
+
+    def test_image_occlusion_is_not_read(self) -> None:
+        card = fake_card({"Image Occlusion": "{{c1::image-occlusion:rect:left=.1}}"},
+                         "{{cloze:Image Occlusion}}", "{{cloze:Image Occlusion}}", cloze=True)
+        self.assertEqual(card_text.question_text(card), "")
+
+
+class AutoReadTest(Sandbox):
+    def setUp(self) -> None:
+        super().setUp()
+        self.saved += [(read_aloud, "mw", read_aloud.mw), (speech, "prefetch", speech.prefetch),
+                       (speech, "stop", speech.stop)]
+        read_aloud.mw = types.SimpleNamespace(
+            state="review", reviewer=types.SimpleNamespace(card=None, web=None),
+            col=types.SimpleNamespace(decks=types.SimpleNamespace(name=lambda did: "AnKing::Micro")))
+        self.spoken: list = []
+        self.fetched: list = []
+        self.stops: list = []
+        speech.speak = lambda text, **kw: self.spoken.append((text, kw))
+        speech.prefetch = lambda text, **kw: self.fetched.append((text, kw))
+        speech.stop = lambda: self.stops.append(1)
+        read_aloud._first_review_hint = lambda: None
+
+    def tearDown(self) -> None:
+        read_aloud._first_review_hint = type(self)._hint
+        super().tearDown()
+
+    _hint = staticmethod(read_aloud._first_review_hint)
+
+    def test_off_by_default_reads_nothing(self) -> None:
+        read_aloud._on_show_question(anking_card())
+        read_aloud._on_show_answer(anking_card())
+        self.assertEqual(self.spoken, [])
+        self.assertEqual(self.fetched, [])
+
+    def test_question_read_on_show_with_the_decks_voice(self) -> None:
+        self.config = {"auto_read": True}
+        read_aloud._on_show_question(anking_card(1))
+        self.assertEqual(self.spoken[0][0], "Vancomycin treats blank")
+        self.assertEqual(self.spoken[0][1]["deck"], "AnKing::Micro")
+        self.assertNotIn("toggle", self.spoken[0][1])
+        # The answer's audio is got ready meanwhile.
+        self.assertEqual(self.fetched[0][0], "Vancomycin treats MRSA")
+        self.assertTrue(self.fetched[0][1]["online"])
+
+    def test_answer_whole_sentence_by_default_or_just_the_words(self) -> None:
+        self.config = {"auto_read": True}
+        read_aloud._on_show_answer(anking_card(1))
+        self.config = {"auto_read": True, "auto_read_answer": "words"}
+        read_aloud._on_show_answer(anking_card(1))
+        self.assertEqual([t for t, _ in self.spoken], ["Vancomycin treats MRSA", "MRSA"])
+
+    def test_basic_card_reads_back_not_extra(self) -> None:
+        self.config = {"auto_read": True}
+        read_aloud._on_show_question(basic_card())
+        read_aloud._on_show_answer(basic_card())
+        self.assertEqual([t for t, _ in self.spoken], ["First-line for MRSA?", "Vancomycin"])
+
+    def test_cards_with_their_own_sound_are_left_alone(self) -> None:
+        self.config = {"auto_read": True}
+        read_aloud._on_show_question(basic_card(sounds=True))
+        read_aloud._on_show_answer(basic_card(sounds=True))
+        self.assertEqual(self.spoken, [])
+
+    def test_flipping_stops_the_question_and_leaving_review_stops_it(self) -> None:
+        self.config = {"auto_read": True}
+        read_aloud._on_show_answer(basic_card(sounds=True))
+        self.assertEqual(len(self.stops), 1)
+        read_aloud._on_state_change("overview", "review")
+        self.assertEqual(len(self.stops), 2)
+        read_aloud._on_state_change("review", "overview")
+        self.assertEqual(len(self.stops), 2)
+
+    def test_settings_window_saves_the_choices(self) -> None:
+        from aqt.qt import QWidget
+        settings_window.tooltip = lambda *a, **kw: None
+        self.host = QWidget()
+        d = settings_window.SettingsDialog(self.host)
+        self.assertFalse(d.auto_check.isChecked())
+        self.assertFalse(d.answer_combo.isEnabled())
+        self.assertEqual(d.answer_combo.currentData(), "whole")
+        d.auto_check.setChecked(True)
+        self.assertTrue(d.answer_combo.isEnabled())
+        d.answer_combo.setCurrentIndex(1)
+        d._save()
+        self.assertEqual((self.config["auto_read"], self.config["auto_read_answer"]),
+                         (True, "words"))
+
 
 if __name__ == "__main__":
     unittest.main()

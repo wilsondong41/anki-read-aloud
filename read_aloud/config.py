@@ -91,6 +91,17 @@ def cleanup() -> bool:
     return get().get("cleanup", True) is not False
 
 
+def auto_read() -> bool:
+    """Read each card's question, then its answer, when they show."""
+    return get().get("auto_read") is True
+
+
+def auto_read_answer() -> str:
+    """On the answer side: "whole" (the sentence with the answer filled in)
+    or "words" (just the answer)."""
+    return "words" if get().get("auto_read_answer") == "words" else "whole"
+
+
 def pronunciations() -> dict:
     p = get().get("pronunciations")
     if not isinstance(p, dict):

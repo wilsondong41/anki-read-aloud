@@ -9,6 +9,8 @@
     "slow_speed": 0.65,
     "rate": 0,
     "cleanup": true,
+    "auto_read": false,
+    "auto_read_answer": "whole",
     "deck_voices": {},
     "pronunciations": {}
 }

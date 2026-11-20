@@ -374,16 +374,18 @@ def speak(text: str, slow: bool = False, toggle: bool = False, respell: bool = T
     _watch_speaking()
 
 
-def prefetch(text: str, deck: str | None = None, context: str = "") -> None:
+def prefetch(text: str, deck: str | None = None, context: str = "", online: bool = False) -> None:
     """Get the audio ready while the text is only highlighted, so the key
     plays at once. The neural voice only does this with edge_prefetch on
-    (it sends the text to Microsoft); system voices are made locally."""
+    (it sends the text to Microsoft), or with online (reading cards aloud
+    automatically sends the card's text anyway); system voices are made
+    locally."""
     with cfg.overlay(_settings(text or "", deck, context)):
         spoken = prepare((text or "").strip())
         config = cfg.get()
         if not spoken or not voices.player():
             return
-        if config.get("engine") == "edge" and not config.get("edge_prefetch", False):
+        if config.get("engine") == "edge" and not (online or config.get("edge_prefetch", False)):
             return
         for path in [p for p, job in _prefetching.items() if job.poll() is not None]:
             del _prefetching[path]

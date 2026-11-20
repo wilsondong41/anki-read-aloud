@@ -10,7 +10,14 @@ V (or the key chosen in the settings)
 Shift+V    → read it slowly (good for long drug / bug names)
 Right-click → 🔊 Read Aloud / 🐢 Read Slowly / ✏️ Fix Pronunciation…
 Tools → Read Aloud Settings… (or the add-on's Config button) → voice, key,
-             speed; from there: voices for particular decks, pronunciations
+             speed, reading cards aloud automatically; from there: voices
+             for particular decks, pronunciations
+
+Reading cards aloud automatically (off unless turned on): the question when
+it shows (a cloze's hidden part is read as "blank"), then the answer (the
+whole sentence with it filled in, or just the answer words). Only the main
+text is read, never Extra or other side fields, worked out from the note's
+fields (card_text). Cards with their own sound are left alone.
 
 Optional neural voice: Microsoft's online Edge read-aloud service through
 edge-tts (not an official API), so the text being read is sent to
@@ -48,7 +55,7 @@ except ImportError:
     QWebEnginePage = None
 
 from . import config as cfg
-from . import setup_window, speech
+from . import card_text, setup_window, speech
 from .settings_window import FixPronunciationDialog, SettingsDialog, open_settings
 
 # ── JS injected into every card ───────────────────────────────────────────────
@@ -169,10 +176,59 @@ def _on_show_question(card=None):
     speech.stop()
     _inject(new_card=True)
     _first_review_hint()
+    _auto_read(card, answer=False)
 
 
 def _on_show_answer(card=None):
     _inject()
+    _auto_read(card, answer=True)
+
+
+def _has_own_sound(card) -> bool:
+    # Its own [sound:] or {{tts}} would play under the voice (reading stops
+    # the card's audio), so such cards are left alone, on both sides.
+    try:
+        return bool(card.question_av_tags() or card.answer_av_tags())
+    except Exception:
+        return False
+
+
+def _auto_read(card=None, answer: bool = False) -> None:
+    """With "Read cards aloud automatically" on: read the question when it
+    shows, and the answer when that shows."""
+    if not cfg.auto_read():
+        return
+    card = card or _card_from()
+    if card is None:
+        return
+    if answer:
+        speech.stop()  # the question may still be being read
+    if _has_own_sound(card):
+        return
+    try:
+        if answer:
+            words = card_text.answer_text(card, cfg.auto_read_answer())
+        else:
+            words = card_text.question_text(card)
+    except Exception:
+        cfg.log("auto-read: couldn't get the card's text:\n" + traceback.format_exc())
+        return
+    where = _where_card(card)
+    _safely(speech.speak, words, **where)
+    if not answer:
+        # Get the answer's audio ready while the question is read.
+        try:
+            later = card_text.answer_text(card, cfg.auto_read_answer())
+        except Exception:
+            later = ""
+        if later:
+            _safely(speech.prefetch, later, online=True, **where)
+
+
+def _on_state_change(new_state, old_state) -> None:
+    # Leaving review (deck list, overview) stops any reading.
+    if old_state == "review" and new_state != "review":
+        speech.stop()
 
 
 def _on_previewer_init(previewer) -> None:
@@ -226,6 +282,13 @@ def _where(source=None) -> dict:
     telling Japanese kanji from Chinese."""
     try:
         card = _card_from(source)
+    except Exception:
+        return {}
+    return _where_card(card)
+
+
+def _where_card(card) -> dict:
+    try:
         if not card:
             return {}
         return {"deck": mw.col.decks.name(card.odid or card.did),
@@ -337,6 +400,7 @@ def _setup():
     gui_hooks.state_shortcuts_will_change.append(_on_state_shortcuts)
     gui_hooks.reviewer_did_show_question.append(_on_show_question)
     gui_hooks.reviewer_did_show_answer.append(_on_show_answer)
+    gui_hooks.state_did_change.append(_on_state_change)
     gui_hooks.previewer_did_init.append(_on_previewer_init)
     gui_hooks.card_will_show.append(_on_card_will_show)
     gui_hooks.webview_did_receive_js_message.append(_on_pycmd)
