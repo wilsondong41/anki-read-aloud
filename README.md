@@ -7,6 +7,7 @@ Highlight text on any card (in review or Browse Preview) and press **V** to hear
 ## Features
 
 - **Highlight & press V** (or right-click → **Read Aloud** / **Read Slowly** / **Fix Pronunciation…**) in both the reviewer and Browse Preview.
+- **Read cards aloud automatically (optional):** tick it in **Tools → Read Aloud Settings…** to hear each question when it shows (cloze answers skipped) and the answer when you flip, as the whole sentence or just the answer words. One setting turns it on and off. Main text only; cards with their own audio are left alone. AnKing one-by-one cards are read as each answer is uncovered. Desktop Anki only.
 - **Medical & science shorthand cleanup:** reads `↑K⁺` as "increased potassium", `5 μg/kg` as "5 micrograms per kg", `CD4+` as "CD4 positive", `β` as "beta", `→` as "leads to", etc.
 - **Custom pronunciations:** right-click any word → **Fix Pronunciation…** to teach it a phonetic respelling once and reuse it everywhere.
 - **Automatic language detection & per-deck voices:** automatically picks native voices for Chinese, Japanese, Korean, Russian, Arabic, Hebrew, Thai, and Hindi, or lets you assign a voice per deck.

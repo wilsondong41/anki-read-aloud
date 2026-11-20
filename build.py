@@ -13,7 +13,7 @@ import zipfile
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(ROOT, "read_aloud")
 DIST = os.path.join(ROOT, "dist")
-FILES = ["__init__.py", "config.py", "text.py", "voices.py", "speech.py", "card_text.py", "tts_voice.py", "setup_window.py",
+FILES = ["__init__.py", "config.py", "text.py", "voices.py", "speech.py", "card_text.py", "template_cleanup.py", "setup_window.py",
          "welcome_window.py", "settings_window.py", "win_tts.ps1", "config.json", "config.md", "manifest.json"]
 
 

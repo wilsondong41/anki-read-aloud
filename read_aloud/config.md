@@ -9,7 +9,7 @@ Works on macOS and Windows (Linux: espeak, plus the neural voice if mpv is insta
 
 V can be changed to another letter in the settings.
 
-**Reading cards aloud automatically** (off unless you turn it on in the settings): the question is read when it shows (a cloze's hidden part is read as "blank"), and the answer when you flip the card: the whole sentence with the answer filled in, or just the answer words. Only the card's main text is read, never Extra or other side fields. Cards with their own sound are left alone. Press V to stop it. Desktop only.
+**Reading cards aloud automatically** (off unless you turn it on in Tools → Read Aloud Settings…; that one setting turns it on and off): the question is read when it shows (a cloze's hidden part is skipped), and the answer when you flip the card: the whole sentence with the answer filled in, or just the answer words. Only the card's main text is read, never Extra or other side fields. Cards with their own sound are left alone. Press V to stop it. Desktop Anki only.
 
 **Privacy:** the neural voice uses Microsoft's online Edge read-aloud service
 through the free edge-tts tool (not an official Microsoft API), so the text you

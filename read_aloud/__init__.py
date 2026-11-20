@@ -1,5 +1,5 @@
 """
-Read Aloud — Anki Add-on (v17)
+Read Aloud — Anki Add-on (v18)
 
 Highlight text on a card and press V to hear it:
 
@@ -13,16 +13,14 @@ Tools → Read Aloud Settings… (or the add-on's Config button) → voice, key,
              speed, reading cards aloud automatically; from there: voices
              for particular decks, pronunciations
 
-Reading cards aloud automatically (off unless turned on): the question when
-it shows (a cloze's hidden part is read as "blank"), then the answer (the
-whole sentence with it filled in, or just the answer words). Only the main
-text is read, never Extra or other side fields, worked out from the note's
-fields (card_text). Cards with their own sound are left alone.
-
-Read_Aloud voice (tts_voice): a template line like
-{{tts en_US voices=Read_Aloud,Apple_Ava_(Premium):cloze:Text}} is read by
-this add-on on the computer and by the phone's own voice on a phone; the
-deck option "Don't play audio automatically" turns it on and off.
+Reading cards aloud automatically (Tools → Read Aloud Settings…, off unless
+turned on; that setting alone turns it on and off): the question when it
+shows (a cloze's hidden part is skipped), then the answer (the whole sentence
+with it filled in, or just the answer words). Only the main text is read,
+never Extra or other side fields, worked out from the note's fields
+(card_text). Cards with their own sound are left alone. Desktop Anki only.
+An earlier test build put read-aloud lines into card templates for phones;
+template_cleanup takes them out when a profile opens.
 
 Optional neural voice: Microsoft's online Edge read-aloud service through
 edge-tts (not an official API), so the text being read is sent to
@@ -45,7 +43,7 @@ import json
 import traceback
 
 from aqt import gui_hooks, mw
-from aqt.qt import QAction, QApplication, QMenu, QTimer
+from aqt.qt import QAction, QMenu, QTimer
 from aqt.utils import tooltip
 from aqt.webview import AnkiWebView
 
@@ -60,7 +58,7 @@ except ImportError:
     QWebEnginePage = None
 
 from . import config as cfg
-from . import card_text, setup_window, speech, tts_voice
+from . import card_text, setup_window, speech, template_cleanup
 from .settings_window import FixPronunciationDialog, SettingsDialog, open_settings
 
 # ── JS injected into every card ───────────────────────────────────────────────
@@ -218,7 +216,6 @@ def _on_show_question(card=None):
     _inject(new_card=True)
     _first_review_hint()
     _auto_read(card, answer=False)
-    _prefetch_answer_line(card)
 
 
 def _on_show_answer(card=None):
@@ -227,22 +224,17 @@ def _on_show_answer(card=None):
 
 
 def _reads_aloud(card) -> bool:
-    """Is this card being read aloud (its own Read_Aloud line, or "Read
-    cards aloud automatically"), with its deck playing sounds?"""
-    if card is None or not _plays_automatically(card):
-        return False
-    if cfg.auto_read():
-        return True
-    try:
-        return any(tts_voice.player.rank_for_tag(t) is not None for t in card.question_av_tags())
-    except Exception:
-        return False
+    """Is this card being read aloud ("Read cards aloud automatically")?"""
+    return card is not None and cfg.auto_read()
 
 
 def _has_own_sound(card, answer: bool) -> bool:
     # That side's own [sound:] or {{tts}} line plays instead (on the answer,
-    # also the question's, if Anki replays it there).
+    # also the question's, if Anki replays it there), unless the deck is set
+    # not to play sounds automatically: then the add-on reads it.
     try:
+        if not card.autoplay():
+            return False
         if not answer:
             return bool(card.question_av_tags())
         replays = getattr(card, "replay_question_audio_on_answer_side", lambda: True)
@@ -251,26 +243,20 @@ def _has_own_sound(card, answer: bool) -> bool:
         return False
 
 
-def _plays_automatically(card) -> bool:
-    # The deck option "Don't play audio automatically" turns reading off too.
-    try:
-        return bool(card.autoplay())
-    except Exception:
-        return True
-
-
 def _auto_read(card=None, answer: bool = False) -> None:
     """With "Read cards aloud automatically" on: read the question when it
     shows, and the answer when that shows."""
     if not cfg.auto_read():
         return
     card = card or _card_from()
-    if card is None or not _plays_automatically(card):
+    if card is None:
         return
     if _has_own_sound(card, answer):
-        return  # (its own read-aloud line may be speaking now: leave it)
+        return  # (its own sound is playing now: leave it)
     if answer:
         speech.stop()  # the question may still be being read
+        if card_text.one_by_one(card):
+            return  # each answer is read as it is uncovered (the reveal watcher)
     try:
         if answer:
             words = card_text.answer_text(card, cfg.auto_read_answer())
@@ -281,7 +267,7 @@ def _auto_read(card=None, answer: bool = False) -> None:
         return
     where = _where_card(card)
     _safely(speech.speak, words, **where)
-    if not answer and not _has_own_sound(card, answer=True):
+    if not answer and not _has_own_sound(card, answer=True) and not card_text.one_by_one(card):
         # Get the answer's audio ready while the question is read.
         try:
             later = card_text.answer_text(card, cfg.auto_read_answer())
@@ -295,10 +281,8 @@ _audio_cards: dict = {}  # id(reviewer or previewer) → card id its sounds were
 
 
 def _on_will_play_tags(tags, side, context) -> None:
-    """Just before Anki plays a card's sounds (they may include a read-aloud
-    line this add-on reads): stop leftover speech on a new card, a new
-    question, or when the card has sounds of its own, and tell the
-    Read_Aloud voice which deck the card is in."""
+    """Just before Anki plays a card's sounds: stop leftover speech on a new
+    card, a new question, or when the card has sounds of its own."""
     try:
         card = _card_from(context)
     except Exception:
@@ -310,37 +294,6 @@ def _on_will_play_tags(tags, side, context) -> None:
     is_reviewer = context is getattr(mw, "reviewer", None)
     if new_card or tags or (is_reviewer and side == "question"):
         speech.stop()
-    tts_voice.player.where = _where_card(card)
-    tts_voice.player.side = side
-
-
-def _where_now():
-    """The card a read-aloud line belongs to: the previewer in front, else
-    the reviewer's card (None: use the last card that played sounds)."""
-    try:
-        win = QApplication.activeWindow()
-        for previewer, _ in _previewers.values():
-            if previewer is win:
-                return _where(previewer)
-        if mw.state == "review":
-            return _where(mw.reviewer) or None
-    except Exception:
-        pass
-    return None
-
-
-def _prefetch_answer_line(card=None) -> None:
-    """While the question is read, get a Read_Aloud answer line ready."""
-    card = card or _card_from()
-    try:
-        if card is None or not card.autoplay():
-            return
-        lines = [t for t in card.answer_av_tags() if tts_voice.player.rank_for_tag(t) is not None]
-    except Exception:
-        return
-    if lines:
-        _safely(speech.prefetch, tts_voice.line_text(lines[0], question=False), online=True,
-                **_where_card(card))
 
 
 def _on_state_change(new_state, old_state) -> None:
@@ -513,8 +466,25 @@ def _on_state_shortcuts(state, shortcuts):
 _checked_setup = False
 
 
+def _remove_old_template_lines() -> None:
+    """Take out read-aloud lines an earlier test build put in card templates
+    (they read every card by themselves, whatever the settings say)."""
+    col = getattr(mw, "col", None)
+    if col is None:
+        return
+    try:
+        changed = template_cleanup.clean_collection(col)
+    except Exception:
+        cfg.log("couldn't remove the old read-aloud lines from card templates:\n"
+                + traceback.format_exc())
+        return
+    if changed:
+        cfg.log("removed the old read-aloud lines from: " + ", ".join(changed))
+
+
 def _on_profile_open():
     global _checked_setup
+    _remove_old_template_lines()
     if not _checked_setup:
         _checked_setup = True
         QTimer.singleShot(3000, setup_window.startup_check)
@@ -527,8 +497,6 @@ def _setup():
     gui_hooks.state_did_change.append(_on_state_change)
     if _PLAY_HOOK is not None:
         _PLAY_HOOK.append(_on_will_play_tags)
-    tts_voice.player.locate = _where_now
-    tts_voice.register()
     gui_hooks.previewer_did_init.append(_on_previewer_init)
     gui_hooks.card_will_show.append(_on_card_will_show)
     gui_hooks.webview_did_receive_js_message.append(_on_pycmd)

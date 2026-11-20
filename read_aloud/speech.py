@@ -266,11 +266,6 @@ def _speak_directly(spoken: str, slow: bool):
 ##############################################################################
 
 
-def current():
-    """What is speaking now (or None)."""
-    return _current
-
-
 def is_speaking() -> bool:
     return _current is not None and _current.poll() is None
 
@@ -345,12 +340,10 @@ def _remember_language(lang: str) -> None:
 
 
 def speak(text: str, slow: bool = False, toggle: bool = False, respell: bool = True,
-          deck: str | None = None, context: str = "", stop_card_audio: bool = True):
+          deck: str | None = None, context: str = ""):
     """Speak text (with the voice of that deck, if one is set). With toggle,
     pressing again while the same text is still being read stops it.
     context: the rest of the card, for telling Japanese kanji from Chinese.
-    stop_card_audio: stop the card's own sound first (not when the card's
-    own read-aloud line is what asked for this; see tts_voice).
     Returns what is speaking, or None."""
     global _current, _current_key
     text = (text or "").strip()
@@ -361,8 +354,7 @@ def speak(text: str, slow: bool = False, toggle: bool = False, respell: bool = T
         stop()
         return None
     stop()
-    if stop_card_audio:
-        _stop_card_audio()
+    _stop_card_audio()
     with cfg.overlay(_settings(text, deck, context)):
         spoken = prepare(text, respell)
         if not spoken:

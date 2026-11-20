@@ -677,6 +677,9 @@ def fake_card(fields: dict, qfmt: str, afmt: str, cloze: bool, ord_: int = 0,
         def __getitem__(self, key):
             return fields[key]
 
+        def keys(self):
+            return list(fields)
+
     note = FakeNote()
     return types.SimpleNamespace(
         id=7, did=did, odid=0, ord=ord_, note=lambda: note,
@@ -688,11 +691,11 @@ def fake_card(fields: dict, qfmt: str, afmt: str, cloze: bool, ord_: int = 0,
     )
 
 
-def anking_card(ord_: int = 0, **kw):
+def anking_card(ord_: int = 0, one_by_one: str = "", **kw):
     return fake_card({"Text": "{{c1::Vancomycin}} treats <b>{{c2::MRSA}}</b><br>"
                               "<img src=\"x.png\">[sound:x.mp3]",
                       "Extra": "Red man syndrome", "Lecture Notes": "slide 4",
-                      "One by one": ""},
+                      "One by one": one_by_one},
                      ANKING_FRONT, ANKING_BACK, cloze=True, ord_=ord_, **kw)
 
 
@@ -820,6 +823,15 @@ class AutoReadTest(Sandbox):
         read_aloud._on_show_answer(anking_card(1))
         self.assertEqual([t for t, _ in self.spoken], ["Vancomycin treats MRSA", "MRSA"])
 
+    def test_one_by_one_cards_dont_give_the_answers_away(self) -> None:
+        # Each answer is read as it is uncovered instead (RevealTest).
+        self.config = {"auto_read": True}
+        read_aloud._on_show_question(anking_card(1, one_by_one="y"))
+        read_aloud._on_show_answer(anking_card(1, one_by_one="y"))
+        self.assertEqual([t for t, _ in self.spoken], ["Vancomycin treats"])
+        self.assertEqual(self.fetched, [])  # nothing sent ahead either
+        self.assertFalse(card_text.one_by_one(anking_card(1, one_by_one="<br>")))  # empty field
+
     def test_basic_card_reads_back_not_extra(self) -> None:
         self.config = {"auto_read": True}
         read_aloud._on_show_question(basic_card())
@@ -831,6 +843,9 @@ class AutoReadTest(Sandbox):
         read_aloud._on_show_question(basic_card(sounds=True))
         read_aloud._on_show_answer(basic_card(sounds=True))
         self.assertEqual(self.spoken, [])
+        # Unless the deck doesn't play sounds by itself: then they're read.
+        read_aloud._on_show_question(basic_card(sounds=True, autoplay=False))
+        self.assertEqual([t for t, _ in self.spoken], ["First-line for MRSA?"])
 
     def test_older_anki_without_the_sound_hook_still_stops_on_a_new_card(self) -> None:
         saved = read_aloud._PLAY_HOOK
@@ -843,11 +858,16 @@ class AutoReadTest(Sandbox):
         read_aloud._on_show_question(basic_card())  # with the hook: stopped there instead
         self.assertEqual(len(self.stops), 1)
 
-    def test_deck_option_dont_play_audio_turns_it_off(self) -> None:
+    def test_the_setting_alone_turns_it_on_and_off(self) -> None:
+        # The deck option "Don't play audio automatically" doesn't matter.
         self.config = {"auto_read": True}
         read_aloud._on_show_question(basic_card(autoplay=False))
         read_aloud._on_show_answer(basic_card(autoplay=False))
-        self.assertEqual(self.spoken, [])
+        self.assertEqual([t for t, _ in self.spoken], ["First-line for MRSA?", "Vancomycin"])
+        self.config = {"auto_read": False}
+        read_aloud._on_show_question(basic_card())
+        read_aloud._on_show_answer(basic_card())
+        self.assertEqual(len(self.spoken), 2)
 
     def test_sound_only_on_the_answer_still_reads_the_question(self) -> None:
         self.config = {"auto_read": True}
@@ -874,33 +894,27 @@ class AutoReadTest(Sandbox):
         self.host = QWidget()
         d = settings_window.SettingsDialog(self.host)
         self.assertFalse(d.auto_check.isChecked())
-        self.assertTrue(d.answer_combo.isEnabled())  # also for cards' own lines
+        self.assertFalse(d.answer_combo.isEnabled())  # only matters when it's on
         self.assertEqual(d.answer_combo.currentData(), "whole")
         d.auto_check.setChecked(True)
+        self.assertTrue(d.answer_combo.isEnabled())
         d.answer_combo.setCurrentIndex(1)
-        applied = []
-        saved_apply = tts_voice.apply_answer_mode
-        tts_voice.apply_answer_mode = lambda col, mode: applied.append(mode) or 1
-        settings_window.mw = types.SimpleNamespace(col=None, **vars(settings_window.mw))
-        try:
-            d._save()
-        finally:
-            tts_voice.apply_answer_mode = saved_apply
-        self.assertEqual(applied, ["words"])
+        d._save()
         self.assertEqual((self.config["auto_read"], self.config["auto_read_answer"]),
                          (True, "words"))
+        # Turning it off also stops a card being read right now.
+        d = settings_window.SettingsDialog(self.host)
+        self.assertTrue(d.auto_check.isChecked())
+        d.auto_check.setChecked(False)
+        self.stops.clear()
+        d._save()
+        self.assertIs(self.config["auto_read"], False)
+        self.assertEqual(len(self.stops), 1)
 
 
 
-# The Read_Aloud voice for Anki's own read-aloud lines
+# Stopping leftover speech just before a card's sounds play
 ##############################################################################
-
-from anki.sound import TTSTag  # noqa: E402
-from read_aloud import tts_voice  # noqa: E402
-
-
-def tts(text="Vancomycin treats MRSA", voices=("Read_Aloud", "Apple_Ava_(Premium)")):
-    return TTSTag(field_text=text, lang="en_US", voices=list(voices), speed=1.2, other_args=[])
 
 
 def pump(until, seconds: float = 3.0) -> bool:
@@ -913,145 +927,22 @@ def pump(until, seconds: float = 3.0) -> bool:
     return until()
 
 
-class FakeJob:
-    def __init__(self):
-        self.done = False
-
-    def poll(self):
-        return 0 if self.done else None
-
-
-class ReadAloudVoiceTest(Sandbox):
+class LeftoverSpeechTest(Sandbox):
     def setUp(self) -> None:
         super().setUp()
-        self.saved += [(speech, "stop", speech.stop), (speech, "_current", speech._current)]
-        self.spoken: list = []
+        self.saved += [(speech, "stop", speech.stop), (read_aloud, "mw", read_aloud.mw)]
         self.stops: list = []
-        self.jobs: list = []
+        speech.stop = lambda: self.stops.append(1)
 
-        def speak(text, **kw):
-            job = FakeJob()
-            self.jobs.append(job)
-            self.spoken.append((text, kw))
-            speech._current = job
-            return job
-
-        def stop():
-            self.stops.append(1)
-            speech._current = None
-
-        speech.speak = speak
-        speech.stop = stop
-        self.player = tts_voice.ReadAloudVoice()
-        self.done: list = []
-
-    def test_claims_only_lines_that_ask_for_it_in_list_order(self) -> None:
-        self.assertEqual(self.player.rank_for_tag(tts()), 0)
-        self.assertEqual(self.player.rank_for_tag(tts(voices=("Apple_Ava_(Premium)", "Read_Aloud"))), -1)
-        self.assertIsNone(self.player.rank_for_tag(tts(voices=("Apple_Ava_(Premium)",))))
-        self.assertIsNone(self.player.rank_for_tag(tts(voices=())))
-        from anki.sound import SoundOrVideoTag
-        self.assertIsNone(self.player.rank_for_tag(SoundOrVideoTag(filename="a.mp3")))
-
-    def test_reads_with_the_add_ons_voice_and_says_when_done_once(self) -> None:
-        self.player.where = {"deck": "AnKing::Micro", "context": "ctx"}
-        self.player.play(tts(), lambda: self.done.append(1))
-        self.assertEqual(self.spoken, [("Vancomycin treats MRSA", {
-            "stop_card_audio": False, "deck": "AnKing::Micro", "context": "ctx"})])
-        self.assertFalse(pump(lambda: self.done, 0.3))
-        self.jobs[0].done = True
-        self.assertTrue(pump(lambda: self.done))
-        self.assertFalse(pump(lambda: len(self.done) > 1, 0.3))
-
-    def test_stop_ends_its_own_speech_and_still_says_done(self) -> None:
-        self.player.play(tts(), lambda: self.done.append(1))
-        self.player.stop()
-        self.assertEqual(len(self.stops), 1)
-        self.assertTrue(pump(lambda: self.done))
-        self.assertFalse(pump(lambda: len(self.done) > 1, 0.3))
-
-    def test_v_takes_over_without_being_stopped_twice(self) -> None:
-        self.player.play(tts(), lambda: self.done.append(1))
-        speech._current = FakeJob()  # V read something else
-        self.assertTrue(pump(lambda: self.done))
-        self.player.stop()  # Anki moving on: must not stop the V speech
-        self.assertEqual(self.stops, [])
-
-    def test_a_late_done_cannot_end_the_next_line(self) -> None:
-        first, second = [], []
-        self.player.play(tts("one"), lambda: first.append(1))
-        self.player.stop()                       # schedules "done" for the first
-        self.player.play(tts("two"), lambda: second.append(1))
-        self.assertFalse(pump(lambda: second, 0.3))
-        self.assertEqual(first, [])              # dropped: Anki had moved on
-
-    def test_the_card_being_read_is_asked_for_at_the_time(self) -> None:
-        self.player.where = {"deck": "Old"}
-        self.player.locate = lambda: {"deck": "Clicked"}
-        self.player.play(tts(), lambda: None)
-        self.assertEqual(self.spoken[0][1]["deck"], "Clicked")
-        self.player.locate = lambda: None  # e.g. the card layout window
-        self.player.play(tts("x"), lambda: None)
-        self.assertEqual(self.spoken[1][1]["deck"], "Old")
-
-    def test_one_timer_for_every_line(self) -> None:
-        self.player.play(tts("one"), lambda: None)
-        timer = self.player._timer
-        self.jobs[0].done = True
-        pump(lambda: not timer.isActive())
-        self.player.play(tts("two"), lambda: None)
-        self.assertIs(self.player._timer, timer)
-        self.assertTrue(timer.isActive())
-
-    def test_lines_say_hidden_parts_like_the_add_on(self) -> None:
-        # Anki's own text for these lines: "blank", or the hint in brackets.
-        self.player.side = "question"
-        self.player.play(tts("Does hepatitis E have an envelope? blank"), lambda: None)
-        self.player.play(tts("Promoters bind [general/specific] factors"), lambda: None)
-        self.assertEqual([t for t, _ in self.spoken],
-                         ["Does hepatitis E have an envelope?", "Promoters bind general or specific factors"])
-
-    def test_sound_file_names_are_not_read(self) -> None:
-        self.player.side = "answer"
-        self.player.play(tts("a blank stare  [sound:y.mp3] and K+"), lambda: None)
-        self.assertEqual(self.spoken[0][0], "a blank stare and K+")
-
-    def test_nothing_to_read_still_says_done(self) -> None:
-        speech.speak = lambda text, **kw: None
-        self.player.play(tts(""), lambda: self.done.append(1))
-        self.assertTrue(pump(lambda: self.done))
-
-    def test_through_ankis_own_player_queue(self) -> None:
-        from aqt.sound import AVPlayer
-        av = AVPlayer()
-        av.players = [self.player]
-        av.play_tags([tts("question one")])
-        self.assertEqual([t for t, _ in self.spoken], ["question one"])
-        # Next card while still reading: Anki stops it and plays the next.
-        av.play_tags([tts("question two")])
-        self.assertTrue(pump(lambda: len(self.spoken) == 2))
-        self.assertEqual(self.spoken[1][0], "question two")
-        self.assertEqual(len(self.stops), 1)
-        self.jobs[1].done = True
-        self.assertTrue(pump(lambda: av.current_player is None))
-
-    def test_new_card_hook_stops_leftovers_and_sets_the_deck(self) -> None:
-        saved_mw = read_aloud.mw
+    def test_new_card_or_question_stops_it_a_flip_with_nothing_to_play_doesnt(self) -> None:
         card = anking_card()
         reviewer = types.SimpleNamespace(card=card)
-        read_aloud.mw = types.SimpleNamespace(
-            reviewer=reviewer,
-            col=types.SimpleNamespace(decks=types.SimpleNamespace(name=lambda did: "AnKing::Micro")))
-        try:
-            read_aloud._audio_cards.clear()
-            read_aloud._on_will_play_tags([tts()], "question", reviewer)
-            self.assertEqual(len(self.stops), 1)
-            self.assertEqual(tts_voice.player.where["deck"], "AnKing::Micro")
-            read_aloud._on_will_play_tags([], "answer", reviewer)  # flip, nothing to play
-            self.assertEqual(len(self.stops), 1)
-        finally:
-            read_aloud.mw = saved_mw
-
+        read_aloud.mw = types.SimpleNamespace(reviewer=reviewer)
+        read_aloud._audio_cards.clear()
+        read_aloud._on_will_play_tags([], "question", reviewer)
+        self.assertEqual(len(self.stops), 1)
+        read_aloud._on_will_play_tags([], "answer", reviewer)  # flip, nothing to play
+        self.assertEqual(len(self.stops), 1)
 
 
 # AnKing's one-by-one clozes, read as they are uncovered
@@ -1068,17 +959,12 @@ class RevealTest(Sandbox):
             state="review", reviewer=types.SimpleNamespace(card=None, web=None),
             col=types.SimpleNamespace(decks=types.SimpleNamespace(name=lambda did: "AnKing::Micro")))
 
-    def anking_line_card(self, autoplay=True):
-        card = anking_card(autoplay=autoplay)
-        card.question_av_tags = lambda: [tts()]
-        return card
-
-    def test_only_cards_being_read_aloud_read_their_reveals(self) -> None:
-        self.assertTrue(read_aloud._reads_aloud(self.anking_line_card()))
-        self.assertFalse(read_aloud._reads_aloud(self.anking_line_card(autoplay=False)))
-        self.assertFalse(read_aloud._reads_aloud(anking_card()))  # no line, auto-read off
+    def test_reveals_are_read_only_with_the_setting_on(self) -> None:
+        self.assertFalse(read_aloud._reads_aloud(anking_card()))
         self.config = {"auto_read": True}
         self.assertTrue(read_aloud._reads_aloud(anking_card()))
+        self.assertTrue(read_aloud._reads_aloud(anking_card(autoplay=False)))
+        self.assertFalse(read_aloud._reads_aloud(None))
 
     def test_uncovered_cloze_is_read_with_the_decks_voice(self) -> None:
         card = anking_card()
@@ -1124,7 +1010,10 @@ class RevealTest(Sandbox):
                   "r.className='cloze-replacer';var h=document.createElement('span');"
                   "h.className='cloze-hidden';while(c.childNodes.length)h.appendChild(c.childNodes[0]);"
                   "c.appendChild(r);c.appendChild(h);})")
-        js("window.__readAloudReveal=true;" + uncover + "('a');" + rehide + "('a')")
+        js(rehide + "('a')")  # covered again, as on a fresh card
+        js("window.__readAloudReveal=true;window.err=null;try{" + uncover + "('a');" + rehide
+           + "('a')}catch(e){window.err=String(e)}")
+        self.assertIsNone(js("window.err"))
         pump(lambda: False, 0.3)
         self.assertEqual(js("window.sent"), [])
         js(uncover + "('b')")
@@ -1137,40 +1026,119 @@ class RevealTest(Sandbox):
 
 
 
-# The answer choice, written into cards' own read-aloud lines
+# Taking out the read-aloud lines an earlier test build put in templates
 ##############################################################################
 
-ANKING_BACK_LINE = ('<!-- Read Aloud -->\n{{^One by one}}{{tts en_US voices=Read_Aloud,'
-                    'Apple_Ava_(Premium),Apple_Zoe_(Premium),Apple_Samantha speed=1.2:cloze:Text}}'
-                    '{{/One by one}}<!--tts en_US voices=Apple_Samantha speed=1.4:cloze-only:Text-->'
-                    '{{tts en_US voices=Apple_Samantha:cloze:Other}}')
+from read_aloud import template_cleanup  # noqa: E402
+
+PROTECTED = "<!-- ANKIHUB_END -->\n<!-- Do not edit or remove this comment -->\n"
+REST = "<!-- Disable accidental website redirects when clicking images -->\n<script>x()</script>"
+OLD_FRONT = (PROTECTED + '<!-- Read Aloud: reads the card aloud (Mac: Read Aloud add-on voice; iPhone: Ava). '
+             "On/off: deck option \"Don't play audio automatically\". -->\n"
+             "{{tts en_US voices=Read_Aloud,Apple_Ava_(Premium),Apple_Zoe_(Premium),Apple_Samantha "
+             "speed=1.2:cloze:Text}}\n" + REST)
+OLD_BACK = (PROTECTED + '<!-- Read Aloud: reads the card aloud (Mac: Read Aloud add-on voice; iPhone: Ava). '
+            "On/off: deck option \"Don't play audio automatically\". Not on one-by-one cards (it would "
+            'give away the answers). -->\n'
+            "{{^One by one}}{{tts en_US voices=Read_Aloud,Apple_Ava_(Premium),Apple_Zoe_(Premium),"
+            "Apple_Samantha speed=1.2:cloze-only:Text}}{{/One by one}}\n" + REST)
+OTHERS = "<!--tts en_US voices=Apple_Samantha speed=1.4:cloze-only:Text-->{{tts en_US voices=Apple_Samantha:Front}}"
 
 
-class AnswerChoiceTest(unittest.TestCase):
-    def test_only_read_aloud_lines_switch(self) -> None:
-        words = tts_voice.answer_line(ANKING_BACK_LINE, "words")
-        self.assertIn("speed=1.2:cloze-only:Text}}{{/One by one}}", words)
-        self.assertIn("{{tts en_US voices=Apple_Samantha:cloze:Other}}", words)  # not ours
-        self.assertIn("speed=1.4:cloze-only:Text-->", words)  # AnKing's own comment untouched
-        self.assertEqual(tts_voice.answer_line(words, "words"), words)
-        self.assertEqual(tts_voice.answer_line(words, "whole"), ANKING_BACK_LINE)
+class TemplateCleanupTest(unittest.TestCase):
+    def test_lines_come_out_leaving_the_template_as_it_was(self) -> None:
+        self.assertEqual(template_cleanup.clean(OLD_FRONT), PROTECTED + REST)
+        self.assertEqual(template_cleanup.clean(OLD_BACK), PROTECTED + REST)
+        self.assertEqual(template_cleanup.clean("a {{tts en_US voices=Read_Aloud:Text}} b"), "a  b")
 
-    def test_written_into_cloze_note_types_only(self) -> None:
-        models = [
-            {"name": "AnKing", "type": 1, "tmpls": [{"qfmt": "{{tts en_US voices=Read_Aloud:cloze:Text}}",
-                                                     "afmt": ANKING_BACK_LINE}]},
-            {"name": "Basic", "type": 0, "tmpls": [{"qfmt": "", "afmt":
-                                                    "{{tts en_US voices=Read_Aloud:cloze:Text}}"}]},
-            {"name": "Plain cloze", "type": 1, "tmpls": [{"qfmt": "", "afmt": "{{cloze:Text}}"}]},
-        ]
-        updated = []
-        col = types.SimpleNamespace(models=types.SimpleNamespace(
-            all=lambda: models, update_dict=lambda m: updated.append(m["name"])))
-        self.assertEqual(tts_voice.apply_answer_mode(col, "words"), 1)
-        self.assertEqual(updated, ["AnKing"])
-        self.assertIn(":cloze-only:Text}}{{/One by one}}", models[0]["tmpls"][0]["afmt"])
-        self.assertEqual(models[0]["tmpls"][0]["qfmt"], "{{tts en_US voices=Read_Aloud:cloze:Text}}")
-        self.assertEqual(tts_voice.apply_answer_mode(col, "words"), 0)  # already so: no change
+    def test_other_read_aloud_lines_are_left_alone(self) -> None:
+        for template in (OTHERS, PROTECTED + REST, "", "{{cloze:Text}}"):
+            self.assertEqual(template_cleanup.clean(template), template)
+
+    def test_in_a_real_collection_cards_no_longer_read_by_themselves(self) -> None:
+        # A throwaway Anki collection (not the user's): the old line makes Anki
+        # play a read-aloud tag on every card; after the cleanup it's gone.
+        from anki.collection import Collection
+        from anki.sound import TTSTag
+        folder = tempfile.mkdtemp()
+        col = Collection(os.path.join(folder, "test.anki2"))
+        try:
+            model = col.models.copy(col.models.by_name("Cloze"))
+            model["name"] = "AnKing-like"
+            col.models.add_field(model, col.models.new_field("One by one"))
+            front, back = model["tmpls"][0]["qfmt"], model["tmpls"][0]["afmt"]
+            model["tmpls"][0]["qfmt"] = OLD_FRONT.replace(REST, front)
+            model["tmpls"][0]["afmt"] = OLD_BACK.replace(REST, back)
+            col.models.update_dict(model)
+            note = col.new_note(col.models.by_name("AnKing-like"))
+            note["Text"] = "{{c1::Vancomycin}} treats MRSA"
+            col.add_note(note, col.decks.id("Default"))
+            card = note.cards()[0]
+            self.assertTrue(any(isinstance(t, TTSTag) for t in card.question_av_tags()))
+            schema = col.db.scalar("select scm from col")
+            self.assertEqual(template_cleanup.clean_collection(col), ["AnKing-like"])
+            self.assertEqual(col.db.scalar("select scm from col"), schema)  # no full sync
+            self.assertEqual(template_cleanup.clean_collection(col), [])  # nothing left: no change
+            model = col.models.by_name("AnKing-like")
+            self.assertEqual(model["tmpls"][0]["qfmt"], PROTECTED + front)
+            self.assertEqual(model["tmpls"][0]["afmt"], PROTECTED + back)
+            card = col.get_card(card.id)
+            self.assertEqual(card.question_av_tags(), [])
+            self.assertEqual(card.answer_av_tags(), [])
+            self.assertIn("Vancomycin", card.answer())
+        finally:
+            col.close()
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_runs_when_a_profile_opens(self) -> None:
+        cleaned = []
+        saved = (read_aloud.mw, template_cleanup.clean_collection, read_aloud._checked_setup)
+        read_aloud.mw = types.SimpleNamespace(col="the collection")
+        template_cleanup.clean_collection = lambda col: cleaned.append(col) or []
+        read_aloud._checked_setup = True  # (skip the voice check)
+        try:
+            read_aloud._on_profile_open()
+            read_aloud._on_profile_open()  # every time (another profile may have them)
+        finally:
+            read_aloud.mw, template_cleanup.clean_collection, read_aloud._checked_setup = saved
+        self.assertEqual(cleaned, ["the collection", "the collection"])
+
+
+class RealCardTest(Sandbox):
+    """Real cards from a throwaway Anki collection, through the add-on's
+    review hooks: the setting alone decides whether anything is read."""
+
+    def test_off_reads_nothing_on_reads_the_card(self) -> None:
+        from anki.collection import Collection
+        folder = tempfile.mkdtemp()
+        col = Collection(os.path.join(folder, "test.anki2"))
+        self.saved += [(read_aloud, "mw", read_aloud.mw), (speech, "prefetch", speech.prefetch),
+                       (speech, "stop", speech.stop),
+                       (read_aloud, "_first_review_hint", read_aloud._first_review_hint)]
+        spoken = []
+        speech.speak = lambda text, **kw: spoken.append(text)
+        speech.prefetch = lambda *a, **kw: None
+        speech.stop = lambda: None
+        read_aloud._first_review_hint = lambda: None
+        read_aloud.mw = types.SimpleNamespace(state="review", col=col,
+                                              reviewer=types.SimpleNamespace(card=None, web=None))
+        try:
+            note = col.new_note(col.models.by_name("Cloze"))
+            note["Text"] = "{{c1::Vancomycin}} treats MRSA"
+            note["Back Extra"] = "Red man syndrome"
+            col.add_note(note, col.decks.id("Micro"))
+            card = note.cards()[0]
+            self.config = {"auto_read": False}
+            read_aloud._on_show_question(card)
+            read_aloud._on_show_answer(card)
+            self.assertEqual(spoken, [])
+            self.config = {"auto_read": True}
+            read_aloud._on_show_question(card)
+            read_aloud._on_show_answer(card)
+            self.assertEqual(spoken, ["treats MRSA", "Vancomycin treats MRSA"])
+        finally:
+            col.close()
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 if __name__ == "__main__":

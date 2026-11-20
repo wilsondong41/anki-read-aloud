@@ -3,8 +3,6 @@ Settings…), voices for particular decks, and the pronunciation windows."""
 
 from __future__ import annotations
 
-import traceback
-
 from aqt import mw
 from aqt.qt import (
     QAbstractItemView,
@@ -32,7 +30,7 @@ from aqt.qt import (
 from aqt.utils import openFolder, tooltip
 
 from . import config as cfg
-from . import setup_window, speech, tts_voice, voices, welcome_window
+from . import setup_window, speech, voices, welcome_window
 from .config import COMPUTER, IS_MAC, IS_WIN
 
 SAMPLE_TEXT = "Pseudomonas aeruginosa makes β-lactamase"
@@ -208,17 +206,13 @@ class SettingsDialog(QDialog):
 
         # Reading cards aloud automatically
         self.auto_check = QCheckBox("Read cards aloud automatically")
-        self.auto_check.setToolTip("For cards without their own read-aloud line: the question "
-                                   "when it shows, then the answer when you flip it. Press the "
-                                   "key to stop it.")
+        self.auto_check.setToolTip("The question when it shows, then the answer when you flip "
+                                   "it. Press the key to stop it.")
         self.answer_combo = QComboBox()
         self.answer_combo.addItem("the whole sentence with the answer filled in", "whole")
         self.answer_combo.addItem("just the answer words", "words")
-        self.auto_note = QLabel("The answer choice also changes cards that have their own "
-                                "read-aloud line (on your phone too, after a sync). Only the "
-                                "card's main text is read, never Extra or other side fields. A "
-                                "deck's option \u201cDon't play audio automatically\u201d turns "
-                                "reading off for it.")
+        self.auto_note = QLabel("Only the card's main text is read, never Extra or other side "
+                                "fields. Cards with their own sound play that instead.")
         self.auto_note.setWordWrap(True)
         self.auto_note.setStyleSheet("color: gray;")
         answer_row = QHBoxLayout()
@@ -376,7 +370,7 @@ class SettingsDialog(QDialog):
         return self.system_combo.currentText().strip()
 
     def _update_auto(self):
-        pass  # the answer choice also applies to cards' own read-aloud lines
+        self.answer_combo.setEnabled(self.auto_check.isChecked())
 
     def _update_enabled(self):
         edge = self.edge_radio.isChecked() and voices.NEURAL_OK
@@ -428,22 +422,14 @@ class SettingsDialog(QDialog):
             speech.speak(SAMPLE_TEXT, slow=slow)
 
     def _save(self):
-        speech.stop()
+        speech.stop()  # (also a card being read right now, so off is off at once)
         config = cfg.get()
         values = self._values()
         if not self._voice_picked:
             values.pop("engine")  # keep what's saved (setup may have changed it)
-        mode_changed = values["auto_read_answer"] != cfg.auto_read_answer()
         config.update(values)
         cfg.save(config)
-        message = "Read Aloud settings saved"
-        if mode_changed:
-            try:
-                if tts_voice.apply_answer_mode(mw.col, values["auto_read_answer"]):
-                    message += ". Cards with their own read-aloud line changed too: sync to send it to your phone"
-            except Exception:
-                cfg.log("answer choice: couldn't change the card templates:\n" + traceback.format_exc())
-        tooltip(message)
+        tooltip("Read Aloud settings saved")
         self.accept()
 
     def reject(self):

@@ -7,6 +7,7 @@
 - Highlight text on a card (in review or Browse Preview) and press **V**. Press **V** again to hear it again; while it's talking, **V** stops it.
 - **Shift+V** reads it slowly, for long names.
 - Or right-click the highlighted text: 🔊 Read Aloud, 🐢 Read Slowly, ✏️ Fix Pronunciation…
+- **New: read cards aloud by themselves.** Tick "Read cards aloud automatically" in Tools → Read Aloud Settings… and each question is read when it shows (a cloze's hidden part is skipped), then the answer when you flip: the whole sentence or just the answer words. Untick it and it stops. Only the card's main text is read, never Extra. Cards with their own sound play that instead. Press V to stop it mid-sentence.
 
 ## Why it's nice
 

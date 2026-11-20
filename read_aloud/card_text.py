@@ -2,9 +2,9 @@
 fields and its card template (not by scraping the shown card, which has
 hint buttons, scripts and side fields like Extra).
 
-Cloze cards: the cloze field(s) on the front. The question reads the
-hidden part as "blank"; the answer reads the whole sentence with it filled
-in, or only the hidden words.
+Cloze cards: the cloze field(s) on the front. The question skips the
+hidden part (a hint with words is read); the answer reads the whole
+sentence with it filled in, or only the hidden words.
 Other cards: the fields shown on the front; the answer is the first field
 the back adds (Back on a Basic card), never side fields like Extra.
 
@@ -102,7 +102,7 @@ def plain(field_html: str) -> str:
 
 # A cloze hint, as Anki shows it in place of the hidden part: "[general/specific]".
 _HINT_RE = re.compile(r"\[([^\[\]\n]{1,100})\]")
-# How Anki says a hidden part with no hint, in a read-aloud line.
+# The stand-in for a hidden part with no hint (see _fill_clozes).
 _BLANK_RE = re.compile(r"\bblank(?:(?:\s*(?:,|\band\b|\bor\b))+\s*blank\b)*\b")
 
 
@@ -110,7 +110,7 @@ def tidy_spoken(text: str, question: bool = True) -> str:
     """How hidden parts are said: not at all, unless a hint gives words
     ("[general/specific]" → "general or specific", "[↑/↓]" → "↑ or ↓", read
     as increased or decreased; "[...]" or "[?]" → nothing).
-    question: the text is a question side, where Anki says "blank" for a
+    question: the text is a question side, where "blank" stands for a
     hidden part (on an answer side the word is the card's own)."""
     def hint(m):
         inside = m.group(1).strip()
@@ -210,6 +210,19 @@ def question_text(card) -> str:
         return tidy_spoken(_sentences(plain(_fill_clozes(v, ordinal, hide=True)) for v in values))
     fields = _plain_refs(template.get("qfmt", ""), names)
     return _sentences(plain(note[f]) for f in fields)
+
+
+def one_by_one(card) -> bool:
+    """AnKing's "One by one" cards uncover the answers one at a time (the
+    add-on reads each as it is uncovered), so the answer isn't read at once."""
+    try:
+        note = card.note()
+        for name in note.keys():
+            if name.strip().lower() == "one by one":
+                return bool(plain(note[name]))
+    except Exception:
+        pass
+    return False
 
 
 def answer_text(card, mode: str = WHOLE) -> str:
