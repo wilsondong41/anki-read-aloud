@@ -340,24 +340,28 @@ def _remember_language(lang: str) -> None:
 
 
 def speak(text: str, slow: bool = False, toggle: bool = False, respell: bool = True,
-          deck: str | None = None, context: str = "") -> None:
+          deck: str | None = None, context: str = "", stop_card_audio: bool = True):
     """Speak text (with the voice of that deck, if one is set). With toggle,
     pressing again while the same text is still being read stops it.
-    context: the rest of the card, for telling Japanese kanji from Chinese."""
+    context: the rest of the card, for telling Japanese kanji from Chinese.
+    stop_card_audio: stop the card's own sound first (not when the card's
+    own read-aloud line is what asked for this; see tts_voice).
+    Returns what is speaking, or None."""
     global _current, _current_key
     text = (text or "").strip()
     if not text:
-        return
+        return None
     key = (text, slow)
     if toggle and is_speaking() and _current_key == key:
         stop()
-        return
+        return None
     stop()
-    _stop_card_audio()
+    if stop_card_audio:
+        _stop_card_audio()
     with cfg.overlay(_settings(text, deck, context)):
         spoken = prepare(text, respell)
         if not spoken:
-            return
+            return None
         if cfg.get().get("engine") == "edge" and voices.NEURAL_OK and voices.edge_command() is None:
             notice("missing")
         lang = voices.reading_language(text, context)
@@ -369,9 +373,10 @@ def speak(text: str, slow: bool = False, toggle: bool = False, respell: bool = T
         except FileNotFoundError:
             tooltip("Read Aloud: no voice found. On Linux, install espeak (and mpv for "
                     "the neural voice).", period=8000)
-            return
+            return None
     _current, _current_key = proc, key
     _watch_speaking()
+    return proc
 
 
 def prefetch(text: str, deck: str | None = None, context: str = "", online: bool = False) -> None:

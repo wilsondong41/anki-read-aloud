@@ -563,17 +563,21 @@ class PreviewerTest(Sandbox):
         speech.stop = lambda: stops.append(1)
         try:
             read_aloud._on_previewer_init(previewer)
+            # Anki: sounds first (the hook), then the card is drawn.
+            read_aloud._on_will_play_tags([], "question", previewer)
             self.assertEqual(read_aloud._on_card_will_show("Q1", card1, "previewQuestion"), "Q1")
             self.assertEqual(len(stops), 1)
             self.assertIn(read_aloud._JS_NEW_CARD, previewer._web.evals[-1])
 
             # Flipping to the answer on the same card keeps speech and selection.
+            read_aloud._on_will_play_tags([], "answer", previewer)
             read_aloud._on_card_will_show("A1", card1, "previewAnswer")
             self.assertEqual(len(stops), 1)
             self.assertNotIn(read_aloud._JS_NEW_CARD, previewer._web.evals[-1])
 
             # Advancing to another card stops speech and clears the selection.
             current[0] = card2
+            read_aloud._on_will_play_tags([], "question", previewer)
             read_aloud._on_card_will_show("Q2", card2, "previewQuestion")
             self.assertEqual(len(stops), 2)
             self.assertIn(read_aloud._JS_NEW_CARD, previewer._web.evals[-1])
@@ -795,6 +799,9 @@ class AutoReadTest(Sandbox):
 
     def test_flipping_stops_the_question_and_leaving_review_stops_it(self) -> None:
         self.config = {"auto_read": True}
+        read_aloud._on_show_answer(basic_card())
+        self.assertEqual(len(self.stops), 1)
+        # A card with its own read-aloud line: that may be speaking, leave it.
         read_aloud._on_show_answer(basic_card(sounds=True))
         self.assertEqual(len(self.stops), 1)
         read_aloud._on_state_change("overview", "review")
@@ -816,6 +823,141 @@ class AutoReadTest(Sandbox):
         d._save()
         self.assertEqual((self.config["auto_read"], self.config["auto_read_answer"]),
                          (True, "words"))
+
+
+
+# The Read_Aloud voice for Anki's own read-aloud lines
+##############################################################################
+
+from anki.sound import TTSTag  # noqa: E402
+from read_aloud import tts_voice  # noqa: E402
+
+
+def tts(text="Vancomycin treats MRSA", voices=("Read_Aloud", "Apple_Ava_(Premium)")):
+    return TTSTag(field_text=text, lang="en_US", voices=list(voices), speed=1.2, other_args=[])
+
+
+def pump(until, seconds: float = 3.0) -> bool:
+    end = time.time() + seconds
+    while time.time() < end:
+        _app.processEvents()
+        if until():
+            return True
+        time.sleep(0.01)
+    return until()
+
+
+class FakeJob:
+    def __init__(self):
+        self.done = False
+
+    def poll(self):
+        return 0 if self.done else None
+
+
+class ReadAloudVoiceTest(Sandbox):
+    def setUp(self) -> None:
+        super().setUp()
+        self.saved += [(speech, "stop", speech.stop), (speech, "_current", speech._current)]
+        self.spoken: list = []
+        self.stops: list = []
+        self.jobs: list = []
+
+        def speak(text, **kw):
+            job = FakeJob()
+            self.jobs.append(job)
+            self.spoken.append((text, kw))
+            speech._current = job
+            return job
+
+        def stop():
+            self.stops.append(1)
+            speech._current = None
+
+        speech.speak = speak
+        speech.stop = stop
+        self.player = tts_voice.ReadAloudVoice()
+        self.done: list = []
+
+    def test_claims_only_lines_that_ask_for_it_in_list_order(self) -> None:
+        self.assertEqual(self.player.rank_for_tag(tts()), 0)
+        self.assertEqual(self.player.rank_for_tag(tts(voices=("Apple_Ava_(Premium)", "Read_Aloud"))), -1)
+        self.assertIsNone(self.player.rank_for_tag(tts(voices=("Apple_Ava_(Premium)",))))
+        self.assertIsNone(self.player.rank_for_tag(tts(voices=())))
+        from anki.sound import SoundOrVideoTag
+        self.assertIsNone(self.player.rank_for_tag(SoundOrVideoTag(filename="a.mp3")))
+
+    def test_reads_with_the_add_ons_voice_and_says_when_done_once(self) -> None:
+        self.player.where = {"deck": "AnKing::Micro", "context": "ctx"}
+        self.player.play(tts(), lambda: self.done.append(1))
+        self.assertEqual(self.spoken, [("Vancomycin treats MRSA", {
+            "stop_card_audio": False, "deck": "AnKing::Micro", "context": "ctx"})])
+        self.assertFalse(pump(lambda: self.done, 0.3))
+        self.jobs[0].done = True
+        self.assertTrue(pump(lambda: self.done))
+        self.assertFalse(pump(lambda: len(self.done) > 1, 0.3))
+
+    def test_stop_ends_its_own_speech_and_still_says_done(self) -> None:
+        self.player.play(tts(), lambda: self.done.append(1))
+        self.player.stop()
+        self.assertEqual(len(self.stops), 1)
+        self.assertTrue(pump(lambda: self.done))
+        self.assertFalse(pump(lambda: len(self.done) > 1, 0.3))
+
+    def test_v_takes_over_without_being_stopped_twice(self) -> None:
+        self.player.play(tts(), lambda: self.done.append(1))
+        speech._current = FakeJob()  # V read something else
+        self.assertTrue(pump(lambda: self.done))
+        self.player.stop()  # Anki moving on: must not stop the V speech
+        self.assertEqual(self.stops, [])
+
+    def test_a_late_done_cannot_end_the_next_line(self) -> None:
+        first, second = [], []
+        self.player.play(tts("one"), lambda: first.append(1))
+        self.player.stop()                       # schedules "done" for the first
+        self.player.play(tts("two"), lambda: second.append(1))
+        self.assertFalse(pump(lambda: second, 0.3))
+        self.assertEqual(first, [])              # dropped: Anki had moved on
+
+    def test_sound_file_names_are_not_read(self) -> None:
+        self.player.play(tts("converted via blank  [sound:y.mp3] and K+"), lambda: None)
+        self.assertEqual(self.spoken[0][0], "converted via blank and K+")
+
+    def test_nothing_to_read_still_says_done(self) -> None:
+        speech.speak = lambda text, **kw: None
+        self.player.play(tts(""), lambda: self.done.append(1))
+        self.assertTrue(pump(lambda: self.done))
+
+    def test_through_ankis_own_player_queue(self) -> None:
+        from aqt.sound import AVPlayer
+        av = AVPlayer()
+        av.players = [self.player]
+        av.play_tags([tts("question one")])
+        self.assertEqual([t for t, _ in self.spoken], ["question one"])
+        # Next card while still reading: Anki stops it and plays the next.
+        av.play_tags([tts("question two")])
+        self.assertTrue(pump(lambda: len(self.spoken) == 2))
+        self.assertEqual(self.spoken[1][0], "question two")
+        self.assertEqual(len(self.stops), 1)
+        self.jobs[1].done = True
+        self.assertTrue(pump(lambda: av.current_player is None))
+
+    def test_new_card_hook_stops_leftovers_and_sets_the_deck(self) -> None:
+        saved_mw = read_aloud.mw
+        card = anking_card()
+        reviewer = types.SimpleNamespace(card=card)
+        read_aloud.mw = types.SimpleNamespace(
+            reviewer=reviewer,
+            col=types.SimpleNamespace(decks=types.SimpleNamespace(name=lambda did: "AnKing::Micro")))
+        try:
+            read_aloud._audio_cards.clear()
+            read_aloud._on_will_play_tags([tts()], "question", reviewer)
+            self.assertEqual(len(self.stops), 1)
+            self.assertEqual(tts_voice.player.where["deck"], "AnKing::Micro")
+            read_aloud._on_will_play_tags([], "answer", reviewer)  # flip, nothing to play
+            self.assertEqual(len(self.stops), 1)
+        finally:
+            read_aloud.mw = saved_mw
 
 
 if __name__ == "__main__":

@@ -19,6 +19,11 @@ whole sentence with it filled in, or just the answer words). Only the main
 text is read, never Extra or other side fields, worked out from the note's
 fields (card_text). Cards with their own sound are left alone.
 
+Read_Aloud voice (tts_voice): a template line like
+{{tts en_US voices=Read_Aloud,Apple_Ava_(Premium):cloze:Text}} is read by
+this add-on on the computer and by the phone's own voice on a phone; the
+deck option "Don't play audio automatically" turns it on and off.
+
 Optional neural voice: Microsoft's online Edge read-aloud service through
 edge-tts (not an official API), so the text being read is sent to
 Microsoft. A guided walkthrough installs it in one click; it opens at every
@@ -55,7 +60,7 @@ except ImportError:
     QWebEnginePage = None
 
 from . import config as cfg
-from . import card_text, setup_window, speech
+from . import card_text, setup_window, speech, tts_voice
 from .settings_window import FixPronunciationDialog, SettingsDialog, open_settings
 
 # ── JS injected into every card ───────────────────────────────────────────────
@@ -172,11 +177,12 @@ def _inject(new_card: bool = False) -> None:
 
 
 def _on_show_question(card=None):
-    # New card: forget the previous card's selection and stop any leftover speech.
-    speech.stop()
+    # New card: forget the previous card's selection. (Leftover speech was
+    # stopped just before Anki played the card's sounds: _on_will_play_tags.)
     _inject(new_card=True)
     _first_review_hint()
     _auto_read(card, answer=False)
+    _prefetch_answer_line(card)
 
 
 def _on_show_answer(card=None):
@@ -201,10 +207,10 @@ def _auto_read(card=None, answer: bool = False) -> None:
     card = card or _card_from()
     if card is None:
         return
+    if _has_own_sound(card):
+        return  # (its own read-aloud line may be speaking now: leave it)
     if answer:
         speech.stop()  # the question may still be being read
-    if _has_own_sound(card):
-        return
     try:
         if answer:
             words = card_text.answer_text(card, cfg.auto_read_answer())
@@ -225,6 +231,42 @@ def _auto_read(card=None, answer: bool = False) -> None:
             _safely(speech.prefetch, later, online=True, **where)
 
 
+_audio_cards: dict = {}  # id(reviewer or previewer) → card id its sounds were last for
+
+
+def _on_will_play_tags(tags, side, context) -> None:
+    """Just before Anki plays a card's sounds (they may include a read-aloud
+    line this add-on reads): stop leftover speech on a new card, a new
+    question, or when the card has sounds of its own, and tell the
+    Read_Aloud voice which deck the card is in."""
+    try:
+        card = _card_from(context)
+    except Exception:
+        card = None
+    if card is None:
+        return
+    new_card = _audio_cards.get(id(context)) != card.id
+    _audio_cards[id(context)] = card.id
+    is_reviewer = context is getattr(mw, "reviewer", None)
+    if new_card or tags or (is_reviewer and side == "question"):
+        speech.stop()
+    tts_voice.player.where = _where_card(card)
+
+
+def _prefetch_answer_line(card=None) -> None:
+    """While the question is read, get a Read_Aloud answer line ready."""
+    card = card or _card_from()
+    try:
+        if card is None or not card.autoplay():
+            return
+        lines = [t for t in card.answer_av_tags() if tts_voice.player.rank_for_tag(t) is not None]
+    except Exception:
+        return
+    if lines:
+        _safely(speech.prefetch, tts_voice.line_text(lines[0]), online=True,
+                **_where_card(card))
+
+
 def _on_state_change(new_state, old_state) -> None:
     # Leaving review (deck list, overview) stops any reading.
     if old_state == "review" and new_state != "review":
@@ -238,6 +280,7 @@ def _on_previewer_init(previewer) -> None:
 
 def _on_previewer_closed(previewer) -> None:
     _previewers.pop(id(previewer), None)
+    _audio_cards.pop(id(previewer), None)
     speech.stop()
 
 
@@ -253,8 +296,7 @@ def _on_card_will_show(text: str, card, kind: str) -> str:
                 continue
             new_card = last_card_id != card.id
             if new_card:
-                entry[1] = card.id
-                speech.stop()
+                entry[1] = card.id  # (speech was stopped in _on_will_play_tags)
             _inject_into(web, new_card=new_card)
     return text
 
@@ -401,6 +443,8 @@ def _setup():
     gui_hooks.reviewer_did_show_question.append(_on_show_question)
     gui_hooks.reviewer_did_show_answer.append(_on_show_answer)
     gui_hooks.state_did_change.append(_on_state_change)
+    gui_hooks.av_player_will_play_tags.append(_on_will_play_tags)
+    tts_voice.register()
     gui_hooks.previewer_did_init.append(_on_previewer_init)
     gui_hooks.card_will_show.append(_on_card_will_show)
     gui_hooks.webview_did_receive_js_message.append(_on_pycmd)
