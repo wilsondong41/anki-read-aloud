@@ -14,7 +14,9 @@ V can be changed to another letter in the settings.
 **Privacy:** the neural voice uses Microsoft's online Edge read-aloud service
 through the free edge-tts tool (not an official Microsoft API), so the text you
 have read aloud is sent to Microsoft. With prefetch on, that happens as soon as
-you highlight text. The system voice works offline and sends nothing.
+you highlight text. When cards are read automatically, the answer's text is
+sent while the question is read, so it's ready when you flip. The system voice
+works offline and sends nothing.
 
 **Uninstalling:** the setup installs edge-tts outside Anki. To remove it too:
 run `uv tool uninstall edge-tts`, and delete the "Read Aloud for Anki" folder

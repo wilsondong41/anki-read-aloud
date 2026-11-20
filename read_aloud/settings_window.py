@@ -211,10 +211,10 @@ class SettingsDialog(QDialog):
         self.answer_combo = QComboBox()
         self.answer_combo.addItem("the whole sentence with the answer filled in", "whole")
         self.answer_combo.addItem("just the answer words", "words")
-        self.auto_note = QLabel("Only the card's main text is read (never Extra or other side "
-                                "fields). Cards with their own sound or read-aloud line are "
-                                "left alone: those follow the deck option \u201cDon't play "
-                                "audio automatically\u201d.")
+        self.auto_note = QLabel("For cards without their own sound or read-aloud line (those "
+                                "play their own). Only the card's main text is read, never Extra "
+                                "or other side fields. A deck's option \u201cDon't play audio "
+                                "automatically\u201d turns reading off for it.")
         self.auto_note.setWordWrap(True)
         self.auto_note.setStyleSheet("color: gray;")
         answer_row = QHBoxLayout()

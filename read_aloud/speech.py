@@ -266,6 +266,11 @@ def _speak_directly(spoken: str, slow: bool):
 ##############################################################################
 
 
+def current():
+    """What is speaking now (or None)."""
+    return _current
+
+
 def is_speaking() -> bool:
     return _current is not None and _current.poll() is None
 

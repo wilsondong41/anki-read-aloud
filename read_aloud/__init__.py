@@ -45,7 +45,7 @@ import json
 import traceback
 
 from aqt import gui_hooks, mw
-from aqt.qt import QAction, QMenu, QTimer
+from aqt.qt import QAction, QApplication, QMenu, QTimer
 from aqt.utils import tooltip
 from aqt.webview import AnkiWebView
 
@@ -151,6 +151,9 @@ _JS_INJECT = """
 """
 
 _JS_NEW_CARD = "window.__readAloudSel = '';"
+# Anki's hook just before a card's sounds play (missing in older versions:
+# then leftover speech is stopped when the card shows, as before).
+_PLAY_HOOK = getattr(gui_hooks, "av_player_will_play_tags", None)
 _previewers: dict = {}  # id(Previewer) → [previewer, last rendered card id]
 
 
@@ -179,6 +182,8 @@ def _inject(new_card: bool = False) -> None:
 def _on_show_question(card=None):
     # New card: forget the previous card's selection. (Leftover speech was
     # stopped just before Anki played the card's sounds: _on_will_play_tags.)
+    if _PLAY_HOOK is None:
+        speech.stop()
     _inject(new_card=True)
     _first_review_hint()
     _auto_read(card, answer=False)
@@ -190,13 +195,24 @@ def _on_show_answer(card=None):
     _auto_read(card, answer=True)
 
 
-def _has_own_sound(card) -> bool:
-    # Its own [sound:] or {{tts}} would play under the voice (reading stops
-    # the card's audio), so such cards are left alone, on both sides.
+def _has_own_sound(card, answer: bool) -> bool:
+    # That side's own [sound:] or {{tts}} line plays instead (on the answer,
+    # also the question's, if Anki replays it there).
     try:
-        return bool(card.question_av_tags() or card.answer_av_tags())
+        if not answer:
+            return bool(card.question_av_tags())
+        replays = getattr(card, "replay_question_audio_on_answer_side", lambda: True)
+        return bool(card.answer_av_tags() or (replays() and card.question_av_tags()))
     except Exception:
         return False
+
+
+def _plays_automatically(card) -> bool:
+    # The deck option "Don't play audio automatically" turns reading off too.
+    try:
+        return bool(card.autoplay())
+    except Exception:
+        return True
 
 
 def _auto_read(card=None, answer: bool = False) -> None:
@@ -205,9 +221,9 @@ def _auto_read(card=None, answer: bool = False) -> None:
     if not cfg.auto_read():
         return
     card = card or _card_from()
-    if card is None:
+    if card is None or not _plays_automatically(card):
         return
-    if _has_own_sound(card):
+    if _has_own_sound(card, answer):
         return  # (its own read-aloud line may be speaking now: leave it)
     if answer:
         speech.stop()  # the question may still be being read
@@ -221,7 +237,7 @@ def _auto_read(card=None, answer: bool = False) -> None:
         return
     where = _where_card(card)
     _safely(speech.speak, words, **where)
-    if not answer:
+    if not answer and not _has_own_sound(card, answer=True):
         # Get the answer's audio ready while the question is read.
         try:
             later = card_text.answer_text(card, cfg.auto_read_answer())
@@ -251,6 +267,21 @@ def _on_will_play_tags(tags, side, context) -> None:
     if new_card or tags or (is_reviewer and side == "question"):
         speech.stop()
     tts_voice.player.where = _where_card(card)
+
+
+def _where_now():
+    """The card a read-aloud line belongs to: the previewer in front, else
+    the reviewer's card (None: use the last card that played sounds)."""
+    try:
+        win = QApplication.activeWindow()
+        for previewer, _ in _previewers.values():
+            if previewer is win:
+                return _where(previewer)
+        if mw.state == "review":
+            return _where(mw.reviewer) or None
+    except Exception:
+        pass
+    return None
 
 
 def _prefetch_answer_line(card=None) -> None:
@@ -296,7 +327,9 @@ def _on_card_will_show(text: str, card, kind: str) -> str:
                 continue
             new_card = last_card_id != card.id
             if new_card:
-                entry[1] = card.id  # (speech was stopped in _on_will_play_tags)
+                entry[1] = card.id
+                if _PLAY_HOOK is None:  # (else stopped in _on_will_play_tags)
+                    speech.stop()
             _inject_into(web, new_card=new_card)
     return text
 
@@ -443,7 +476,9 @@ def _setup():
     gui_hooks.reviewer_did_show_question.append(_on_show_question)
     gui_hooks.reviewer_did_show_answer.append(_on_show_answer)
     gui_hooks.state_did_change.append(_on_state_change)
-    gui_hooks.av_player_will_play_tags.append(_on_will_play_tags)
+    if _PLAY_HOOK is not None:
+        _PLAY_HOOK.append(_on_will_play_tags)
+    tts_voice.player.locate = _where_now
     tts_voice.register()
     gui_hooks.previewer_did_init.append(_on_previewer_init)
     gui_hooks.card_will_show.append(_on_card_will_show)

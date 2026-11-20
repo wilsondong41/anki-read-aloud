@@ -83,7 +83,7 @@ def _plain_refs(template: str, names: set) -> list:
 ##############################################################################
 
 _DROP_RE = re.compile(r"<(script|style|svg|button)\b.*?</\1\s*>", re.S | re.I)
-_SOUND_RE = re.compile(r"\[sound:[^\]]*\]|\[anki:[^\]]*\].*?\[/anki:[^\]]*\]", re.S)
+SOUND_RE = re.compile(r"\[sound:[^\]]*\]|\[anki:[^\]]*\].*?\[/anki:[^\]]*\]", re.S)
 _BREAK_RE = re.compile(r"<\s*/?\s*(br|div|p|li|tr|h\d|hr)\b[^>]*>", re.I)
 _ANY_TAG_RE = re.compile(r"<[^>]*>")
 
@@ -92,7 +92,7 @@ def plain(field_html: str) -> str:
     """Field HTML → the words on it: no images, sounds, scripts or tags; a
     line break becomes the end of a sentence."""
     text = _DROP_RE.sub(" ", field_html or "")
-    text = _SOUND_RE.sub(" ", text)
+    text = SOUND_RE.sub(" ", text)
     text = _BREAK_RE.sub("\n", text)
     text = _ANY_TAG_RE.sub(" ", text)
     text = html.unescape(text).replace("\xa0", " ")

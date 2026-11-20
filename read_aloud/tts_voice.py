@@ -25,6 +25,7 @@ from aqt import gui_hooks, mw
 from aqt.qt import QTimer
 from aqt.sound import Player
 
+from . import card_text
 from . import config as cfg
 from . import speech
 
@@ -40,12 +41,12 @@ except ImportError:
 
 VOICE = "Read_Aloud"
 POLL_MS = 100
-# Anki leaves a field's sound files in the line's text ("… [sound:x.mp3]").
-_SOUND_RE = re.compile(r"\[sound:[^\]]*\]")
 
 
 def line_text(tag) -> str:
-    return re.sub(r"\s+", " ", _SOUND_RE.sub(" ", tag.field_text or "")).strip()
+    """The line's words. Anki leaves a field's sound files in them
+    ("… [sound:x.mp3]"): those aren't read."""
+    return re.sub(r"\s+", " ", card_text.SOUND_RE.sub(" ", tag.field_text or "")).strip()
 
 
 class ReadAloudVoice(Player):
@@ -54,9 +55,12 @@ class ReadAloudVoice(Player):
         self._on_done = None
         self._timer = None
         self._playing = 0  # counts plays, so a late "done" can't end a newer one
-        # Set by the add-on before Anki plays a card's sounds: the deck (for
-        # its voice) and the card's text (for telling Japanese from Chinese).
+        # The deck (for its voice) and the card's text (for telling Japanese
+        # from Chinese) of the card being read: locate() asks the add-on at
+        # the time (a clicked play button, R, autoplay); where is the last
+        # card whose sounds Anki played, for anywhere else.
         self.where: dict = {}
+        self.locate = None
 
     # what Anki asks
 
@@ -75,7 +79,8 @@ class ReadAloudVoice(Player):
         self._playing += 1
         self._on_done = on_done
         try:
-            self._job = speech.speak(line_text(tag), stop_card_audio=False, **self.where)
+            where = (self.locate() if self.locate else None) or self.where
+            self._job = speech.speak(line_text(tag), stop_card_audio=False, **where)
         except Exception:
             cfg.log("read-aloud line: couldn't read it:\n" + traceback.format_exc())
             self._job = None
@@ -86,15 +91,16 @@ class ReadAloudVoice(Player):
         if self._job is None:
             self._end_soon()
             return
-        self._timer = QTimer(mw)
-        self._timer.timeout.connect(self._check)
+        if self._timer is None:  # one timer, reused for every line
+            self._timer = QTimer(mw)
+            self._timer.timeout.connect(self._check)
         self._timer.start(POLL_MS)
 
     def stop(self) -> None:
         # Anki stops the player before the next card's sounds (and on R, or
         # leaving review). Stop our speech, if it is still ours, and tell
         # Anki once we've stopped.
-        if self._job is not None and speech._current is self._job:
+        if self._job is not None and speech.current() is self._job:
             speech.stop()
         if self._on_done is not None:
             self._end_soon()
@@ -107,7 +113,7 @@ class ReadAloudVoice(Player):
     def _check(self) -> None:
         job = self._job
         # Finished, or replaced (V on a highlight, or stopped with V).
-        if job is None or job.poll() is not None or speech._current is not job:
+        if job is None or job.poll() is not None or speech.current() is not job:
             self._end(call=True)
 
     def _end_soon(self) -> None:
@@ -119,7 +125,6 @@ class ReadAloudVoice(Player):
     def _end(self, call: bool) -> None:
         if self._timer is not None:
             self._timer.stop()
-            self._timer = None
         self._job = None
         done, self._on_done = self._on_done, None
         if call and done is not None:

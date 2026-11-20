@@ -663,7 +663,8 @@ BASIC_EXTRA_BACK = ('{{FrontSide}}<hr id=answer>{{Back}}'
 
 
 def fake_card(fields: dict, qfmt: str, afmt: str, cloze: bool, ord_: int = 0,
-              sounds: bool = False, did: int = 1):
+              sounds: bool = False, did: int = 1, answer_sounds: bool = False,
+              autoplay: bool = True):
     class FakeNote:
         def note_type(self):
             return {"type": 1 if cloze else 0, "flds": [{"name": n} for n in fields]}
@@ -679,7 +680,9 @@ def fake_card(fields: dict, qfmt: str, afmt: str, cloze: bool, ord_: int = 0,
         id=7, did=did, odid=0, ord=ord_, note=lambda: note,
         template=lambda: {"qfmt": qfmt, "afmt": afmt},
         question_av_tags=lambda: ["sound"] if sounds else [],
-        answer_av_tags=lambda: [],
+        answer_av_tags=lambda: ["sound"] if answer_sounds else [],
+        replay_question_audio_on_answer_side=lambda: True,
+        autoplay=lambda: autoplay,
     )
 
 
@@ -796,6 +799,30 @@ class AutoReadTest(Sandbox):
         read_aloud._on_show_question(basic_card(sounds=True))
         read_aloud._on_show_answer(basic_card(sounds=True))
         self.assertEqual(self.spoken, [])
+
+    def test_older_anki_without_the_sound_hook_still_stops_on_a_new_card(self) -> None:
+        saved = read_aloud._PLAY_HOOK
+        read_aloud._PLAY_HOOK = None
+        try:
+            read_aloud._on_show_question(basic_card())
+        finally:
+            read_aloud._PLAY_HOOK = saved
+        self.assertEqual(len(self.stops), 1)
+        read_aloud._on_show_question(basic_card())  # with the hook: stopped there instead
+        self.assertEqual(len(self.stops), 1)
+
+    def test_deck_option_dont_play_audio_turns_it_off(self) -> None:
+        self.config = {"auto_read": True}
+        read_aloud._on_show_question(basic_card(autoplay=False))
+        read_aloud._on_show_answer(basic_card(autoplay=False))
+        self.assertEqual(self.spoken, [])
+
+    def test_sound_only_on_the_answer_still_reads_the_question(self) -> None:
+        self.config = {"auto_read": True}
+        read_aloud._on_show_question(basic_card(answer_sounds=True))
+        self.assertEqual(self.fetched, [])  # its answer won't be read: nothing sent ahead
+        read_aloud._on_show_answer(basic_card(answer_sounds=True))
+        self.assertEqual([t for t, _ in self.spoken], ["First-line for MRSA?"])
 
     def test_flipping_stops_the_question_and_leaving_review_stops_it(self) -> None:
         self.config = {"auto_read": True}
@@ -918,6 +945,24 @@ class ReadAloudVoiceTest(Sandbox):
         self.player.play(tts("two"), lambda: second.append(1))
         self.assertFalse(pump(lambda: second, 0.3))
         self.assertEqual(first, [])              # dropped: Anki had moved on
+
+    def test_the_card_being_read_is_asked_for_at_the_time(self) -> None:
+        self.player.where = {"deck": "Old"}
+        self.player.locate = lambda: {"deck": "Clicked"}
+        self.player.play(tts(), lambda: None)
+        self.assertEqual(self.spoken[0][1]["deck"], "Clicked")
+        self.player.locate = lambda: None  # e.g. the card layout window
+        self.player.play(tts("x"), lambda: None)
+        self.assertEqual(self.spoken[1][1]["deck"], "Old")
+
+    def test_one_timer_for_every_line(self) -> None:
+        self.player.play(tts("one"), lambda: None)
+        timer = self.player._timer
+        self.jobs[0].done = True
+        pump(lambda: not timer.isActive())
+        self.player.play(tts("two"), lambda: None)
+        self.assertIs(self.player._timer, timer)
+        self.assertTrue(timer.isActive())
 
     def test_sound_file_names_are_not_read(self) -> None:
         self.player.play(tts("converted via blank  [sound:y.mp3] and K+"), lambda: None)
