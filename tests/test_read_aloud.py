@@ -703,9 +703,9 @@ def basic_card(**kw):
 
 
 class CardTextTest(unittest.TestCase):
-    def test_cloze_question_reads_the_hidden_part_as_blank(self) -> None:
-        self.assertEqual(card_text.question_text(anking_card(0)), "blank treats MRSA")
-        self.assertEqual(card_text.question_text(anking_card(1)), "Vancomycin treats blank")
+    def test_cloze_question_says_nothing_for_the_hidden_part(self) -> None:
+        self.assertEqual(card_text.question_text(anking_card(0)), "treats MRSA")
+        self.assertEqual(card_text.question_text(anking_card(1)), "Vancomycin treats")
 
     def test_cloze_answer_whole_sentence_or_just_the_words(self) -> None:
         card = anking_card(1)
@@ -736,22 +736,29 @@ class CardTextTest(unittest.TestCase):
         self.assertEqual(card_text.plain("a&nbsp;b<div>c</div><script>x()</script>d"), "a b. c. d")
         card = fake_card({"Text": "{{c1::Na+::ion}} and {{c2::K+ via {{c1::ATPase}}}}"},
                          "{{cloze:Text}}", "{{cloze:Text}}", cloze=True)
-        self.assertEqual(card_text.question_text(card), "ion and K+ via blank")
+        self.assertEqual(card_text.question_text(card), "ion and K+ via")
         self.assertEqual(card_text.answer_text(card, card_text.WORDS), "Na+, ATPase")
 
     def test_how_hidden_parts_are_said(self) -> None:
         cases = [
             ("Does hepatitis E have an envelope? blank", "Does hepatitis E have an envelope?"),
+            # Anki's text for the milk-alkali card (a list of hidden values)
+            ("How do the following laboratory values change in milk-alkali syndrome?  "
+             "PTH: blank  Ca2+: blank  Metabolic blank",
+             "How do the following laboratory values change in milk-alkali syndrome? "
+             "PTH: Ca2+: Metabolic"),
             ("What are the 3 Ps? blank, blank, and blank", "What are the 3 Ps?"),
-            ("Drug of choice for MRSA: blank", "Drug of choice for MRSA:"),
             ("Promoters bind [general/specific] transcription factors",
              "Promoters bind general or specific transcription factors"),
-            ("Promoters bind blank transcription factors", "Promoters bind blank transcription factors"),
-            ("blank is first-line for MRSA", "blank is first-line for MRSA"),
+            ("Promoters bind blank transcription factors", "Promoters bind transcription factors"),
             ("Is it [yes / no]?", "Is it yes or no?"),
+            ("Shown as [...] or [?] or [_]", "Shown as or or"),
+            ("PTH is [↑/↓]", "PTH is ↑ or ↓"),
         ]
         for raw, said in cases:
             self.assertEqual(card_text.tidy_spoken(raw), said, raw)
+        # On an answer side "blank" is the card's own word.
+        self.assertEqual(card_text.tidy_spoken("a blank stare", question=False), "a blank stare")
 
     def test_question_with_the_answer_on_its_own_line(self) -> None:
         card = fake_card({"Text": "Does hepatitis E have an envelope?<br><br>{{c1::No}}"},
@@ -799,7 +806,7 @@ class AutoReadTest(Sandbox):
     def test_question_read_on_show_with_the_decks_voice(self) -> None:
         self.config = {"auto_read": True}
         read_aloud._on_show_question(anking_card(1))
-        self.assertEqual(self.spoken[0][0], "Vancomycin treats blank")
+        self.assertEqual(self.spoken[0][0], "Vancomycin treats")
         self.assertEqual(self.spoken[0][1]["deck"], "AnKing::Micro")
         self.assertNotIn("toggle", self.spoken[0][1])
         # The answer's audio is got ready meanwhile.
@@ -867,12 +874,19 @@ class AutoReadTest(Sandbox):
         self.host = QWidget()
         d = settings_window.SettingsDialog(self.host)
         self.assertFalse(d.auto_check.isChecked())
-        self.assertFalse(d.answer_combo.isEnabled())
+        self.assertTrue(d.answer_combo.isEnabled())  # also for cards' own lines
         self.assertEqual(d.answer_combo.currentData(), "whole")
         d.auto_check.setChecked(True)
-        self.assertTrue(d.answer_combo.isEnabled())
         d.answer_combo.setCurrentIndex(1)
-        d._save()
+        applied = []
+        saved_apply = tts_voice.apply_answer_mode
+        tts_voice.apply_answer_mode = lambda col, mode: applied.append(mode) or 1
+        settings_window.mw = types.SimpleNamespace(col=None, **vars(settings_window.mw))
+        try:
+            d._save()
+        finally:
+            tts_voice.apply_answer_mode = saved_apply
+        self.assertEqual(applied, ["words"])
         self.assertEqual((self.config["auto_read"], self.config["auto_read_answer"]),
                          (True, "words"))
 
@@ -991,14 +1005,16 @@ class ReadAloudVoiceTest(Sandbox):
 
     def test_lines_say_hidden_parts_like_the_add_on(self) -> None:
         # Anki's own text for these lines: "blank", or the hint in brackets.
+        self.player.side = "question"
         self.player.play(tts("Does hepatitis E have an envelope? blank"), lambda: None)
         self.player.play(tts("Promoters bind [general/specific] factors"), lambda: None)
         self.assertEqual([t for t, _ in self.spoken],
                          ["Does hepatitis E have an envelope?", "Promoters bind general or specific factors"])
 
     def test_sound_file_names_are_not_read(self) -> None:
-        self.player.play(tts("converted via blank  [sound:y.mp3] and K+"), lambda: None)
-        self.assertEqual(self.spoken[0][0], "converted via blank and K+")
+        self.player.side = "answer"
+        self.player.play(tts("a blank stare  [sound:y.mp3] and K+"), lambda: None)
+        self.assertEqual(self.spoken[0][0], "a blank stare and K+")
 
     def test_nothing_to_read_still_says_done(self) -> None:
         speech.speak = lambda text, **kw: None
@@ -1103,13 +1119,58 @@ class RevealTest(Sandbox):
         js(uncover + "('a')")
         pump(lambda: False, 0.3)
         self.assertEqual(js("window.sent"), [])  # not being read aloud: quiet
-        js("window.__readAloudReveal=true;" + uncover + "('b')")
+        # AnKing setting up the answer side: uncover and at once hide again.
+        rehide = ("(function(id){var c=document.getElementById(id);var r=document.createElement('span');"
+                  "r.className='cloze-replacer';var h=document.createElement('span');"
+                  "h.className='cloze-hidden';while(c.childNodes.length)h.appendChild(c.childNodes[0]);"
+                  "c.appendChild(r);c.appendChild(h);})")
+        js("window.__readAloudReveal=true;" + uncover + "('a');" + rehide + "('a')")
+        pump(lambda: False, 0.3)
+        self.assertEqual(js("window.sent"), [])
+        js(uncover + "('b')")
         self.assertTrue(pump(lambda: js("window.sent.length") == 1, 3))
         self.assertEqual(js("window.sent"), ["readAloudReveal:21-hydroxylase"])
         from PyQt6 import sip
         sip.delete(view.page())
         sip.delete(view)
         pump(lambda: False, 0.2)
+
+
+
+# The answer choice, written into cards' own read-aloud lines
+##############################################################################
+
+ANKING_BACK_LINE = ('<!-- Read Aloud -->\n{{^One by one}}{{tts en_US voices=Read_Aloud,'
+                    'Apple_Ava_(Premium),Apple_Zoe_(Premium),Apple_Samantha speed=1.2:cloze:Text}}'
+                    '{{/One by one}}<!--tts en_US voices=Apple_Samantha speed=1.4:cloze-only:Text-->'
+                    '{{tts en_US voices=Apple_Samantha:cloze:Other}}')
+
+
+class AnswerChoiceTest(unittest.TestCase):
+    def test_only_read_aloud_lines_switch(self) -> None:
+        words = tts_voice.answer_line(ANKING_BACK_LINE, "words")
+        self.assertIn("speed=1.2:cloze-only:Text}}{{/One by one}}", words)
+        self.assertIn("{{tts en_US voices=Apple_Samantha:cloze:Other}}", words)  # not ours
+        self.assertIn("speed=1.4:cloze-only:Text-->", words)  # AnKing's own comment untouched
+        self.assertEqual(tts_voice.answer_line(words, "words"), words)
+        self.assertEqual(tts_voice.answer_line(words, "whole"), ANKING_BACK_LINE)
+
+    def test_written_into_cloze_note_types_only(self) -> None:
+        models = [
+            {"name": "AnKing", "type": 1, "tmpls": [{"qfmt": "{{tts en_US voices=Read_Aloud:cloze:Text}}",
+                                                     "afmt": ANKING_BACK_LINE}]},
+            {"name": "Basic", "type": 0, "tmpls": [{"qfmt": "", "afmt":
+                                                    "{{tts en_US voices=Read_Aloud:cloze:Text}}"}]},
+            {"name": "Plain cloze", "type": 1, "tmpls": [{"qfmt": "", "afmt": "{{cloze:Text}}"}]},
+        ]
+        updated = []
+        col = types.SimpleNamespace(models=types.SimpleNamespace(
+            all=lambda: models, update_dict=lambda m: updated.append(m["name"])))
+        self.assertEqual(tts_voice.apply_answer_mode(col, "words"), 1)
+        self.assertEqual(updated, ["AnKing"])
+        self.assertIn(":cloze-only:Text}}{{/One by one}}", models[0]["tmpls"][0]["afmt"])
+        self.assertEqual(models[0]["tmpls"][0]["qfmt"], "{{tts en_US voices=Read_Aloud:cloze:Text}}")
+        self.assertEqual(tts_voice.apply_answer_mode(col, "words"), 0)  # already so: no change
 
 
 if __name__ == "__main__":

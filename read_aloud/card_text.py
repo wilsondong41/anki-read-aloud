@@ -102,25 +102,28 @@ def plain(field_html: str) -> str:
 
 # A cloze hint, as Anki shows it in place of the hidden part: "[general/specific]".
 _HINT_RE = re.compile(r"\[([^\[\]\n]{1,100})\]")
-# Blanks that are the whole answer to a question ("Does hepatitis E have an
-# envelope? blank"): nothing more is said.
-_ANSWER_BLANKS_RE = re.compile(r"([?:])\s*blank(?:(?:\s*(?:,|and|or))*\s*blank)*\s*[.!]?\s*$",
-                               re.IGNORECASE)
+# How Anki says a hidden part with no hint, in a read-aloud line.
+_BLANK_RE = re.compile(r"\bblank(?:(?:\s*(?:,|\band\b|\bor\b))+\s*blank\b)*\b")
 
 
-def tidy_spoken(text: str) -> str:
-    """How hidden parts are said: a hint is read as words ("[general/specific]"
-    → "general or specific"); a blank that is the whole answer after a
-    question is left out; any other is said as "blank"."""
+def tidy_spoken(text: str, question: bool = True) -> str:
+    """How hidden parts are said: not at all, unless a hint gives words
+    ("[general/specific]" → "general or specific", "[↑/↓]" → "↑ or ↓", read
+    as increased or decreased; "[...]" or "[?]" → nothing).
+    question: the text is a question side, where Anki says "blank" for a
+    hidden part (on an answer side the word is the card's own)."""
     def hint(m):
         inside = m.group(1).strip()
-        if inside in ("...", "…"):
-            return " blank "
+        if re.fullmatch(r"[\s.…?_\-–—]*", inside):  # "[...]", "[?]", "[__]": no words
+            return " "
         return " " + re.sub(r"\s*/\s*", " or ", inside) + " "
     text = _HINT_RE.sub(hint, text or "")
+    if question:
+        text = _BLANK_RE.sub(" ", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"\s+([?.!,:;])", r"\1", text)
-    return _ANSWER_BLANKS_RE.sub(r"\1", text).strip()
+    text = re.sub(r"([,;:])(?:\s*[,;])+", r"\1", text)  # "PTH: , Ca" → "PTH: Ca"
+    return text.strip(" ,;")
 
 
 def _sentences(parts) -> str:

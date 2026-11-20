@@ -43,11 +43,44 @@ VOICE = "Read_Aloud"
 POLL_MS = 100
 
 
-def line_text(tag) -> str:
+def line_text(tag, question: bool = True) -> str:
     """The line's words. Anki leaves a field's sound files in them
     ("… [sound:x.mp3]"): those aren't read. Hidden parts are said like the
     add-on's own reading (card_text.tidy_spoken)."""
-    return card_text.tidy_spoken(card_text.SOUND_RE.sub(" ", tag.field_text or ""))
+    return card_text.tidy_spoken(card_text.SOUND_RE.sub(" ", tag.field_text or ""), question)
+
+
+# The answer side's line reads the whole sentence (cloze) or just the
+# answer words (cloze-only). The settings' choice is written into the card
+# templates, so it reaches phones too.
+_ANSWER_LINE_RE = re.compile(
+    r"(\{\{tts [^{}:]*\bvoices=[^{}:\s]*\bRead_Aloud\b[^{}:]*:)(cloze-only|cloze)(:[^{}]+\}\})")
+
+
+def answer_line(afmt: str, mode: str) -> str:
+    """The answer template with its Read_Aloud cloze lines set to mode
+    ("whole" or "words")."""
+    filter_name = "cloze-only" if mode == "words" else "cloze"
+    return _ANSWER_LINE_RE.sub(lambda m: m.group(1) + filter_name + m.group(3), afmt or "")
+
+
+def apply_answer_mode(col, mode: str) -> int:
+    """Set every cloze note type's Read_Aloud answer lines to mode. Returns
+    how many note types changed (only the template text: no full sync)."""
+    changed = 0
+    for model in col.models.all():
+        if model.get("type") != 1:
+            continue
+        touched = False
+        for template in model.get("tmpls", []):
+            new = answer_line(template.get("afmt", ""), mode)
+            if new != template.get("afmt", ""):
+                template["afmt"] = new
+                touched = True
+        if touched:
+            col.models.update_dict(model)
+            changed += 1
+    return changed
 
 
 class ReadAloudVoice(Player):
@@ -62,6 +95,7 @@ class ReadAloudVoice(Player):
         # card whose sounds Anki played, for anywhere else.
         self.where: dict = {}
         self.locate = None
+        self.side = "question"  # the side whose sounds Anki last played
 
     # what Anki asks
 
@@ -81,7 +115,8 @@ class ReadAloudVoice(Player):
         self._on_done = on_done
         try:
             where = (self.locate() if self.locate else None) or self.where
-            self._job = speech.speak(line_text(tag), stop_card_audio=False, **where)
+            text = line_text(tag, question=self.side != "answer")
+            self._job = speech.speak(text, stop_card_audio=False, **where)
         except Exception:
             cfg.log("read-aloud line: couldn't read it:\n" + traceback.format_exc())
             self._job = None

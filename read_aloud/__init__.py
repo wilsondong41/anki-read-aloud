@@ -165,7 +165,12 @@ _JS_INJECT = """
         if (!uncovered.length) return;
         clearTimeout(uncoverTimer);
         uncoverTimer = setTimeout(function() {
-            var words = uncovered.map(function(b) { return (b.innerText || '').trim(); })
+            // Only ones still uncovered: AnKing also uncovers and at once
+            // re-hides every cloze while it sets up the answer side.
+            var words = uncovered.filter(function(b) {
+                                     return b.isConnected && !b.querySelector('.cloze-hidden');
+                                 })
+                                 .map(function(b) { return (b.innerText || '').trim(); })
                                  .filter(function(t) { return t; });
             uncovered = [];
             if (words.length) pycmd('readAloudReveal:' + words.join(', '));
@@ -306,6 +311,7 @@ def _on_will_play_tags(tags, side, context) -> None:
     if new_card or tags or (is_reviewer and side == "question"):
         speech.stop()
     tts_voice.player.where = _where_card(card)
+    tts_voice.player.side = side
 
 
 def _where_now():
@@ -333,7 +339,7 @@ def _prefetch_answer_line(card=None) -> None:
     except Exception:
         return
     if lines:
-        _safely(speech.prefetch, tts_voice.line_text(lines[0]), online=True,
+        _safely(speech.prefetch, tts_voice.line_text(lines[0], question=False), online=True,
                 **_where_card(card))
 
 
